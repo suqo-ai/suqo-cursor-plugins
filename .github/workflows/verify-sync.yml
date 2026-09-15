@@ -78,14 +78,19 @@ jobs:
           npx --yes @disdjj/acplugin@1.7.0 convert "$GITHUB_WORKSPACE/claude-plugins" \
             --all --to cursor -o "$GITHUB_WORKSPACE/scratch"
 
+      # --rename-to: acplugin always names the plugin after the source
+      # ("suqo-claude-plugins"), regardless of target tool - renamed here,
+      # in the pipeline, so it can't get silently reverted by a future run.
       - name: Reconcile manifests (same scripts, same order, as any real run)
         run: |
           node cursor-plugins/tools/reconcile-plugin-manifest.mjs \
             claude-plugins/.claude-plugin/plugin.json \
-            scratch/.cursor-plugin/plugin.json
+            scratch/.cursor-plugin/plugin.json \
+            --rename-to suqo-cursor-plugins
           node cursor-plugins/tools/reconcile-cursor-marketplace-manifest.mjs \
             claude-plugins/.claude-plugin/marketplace.json \
-            scratch/.cursor-plugin/marketplace.json
+            scratch/.cursor-plugin/marketplace.json \
+            suqo-claude-plugins --rename-to suqo-cursor-plugins
 
       - name: Diff expected output against what's actually committed
         run: |

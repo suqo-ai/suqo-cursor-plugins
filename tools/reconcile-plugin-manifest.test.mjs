@@ -179,3 +179,39 @@ test('exits non-zero with a usage message when arguments are missing', () => {
     return true;
   });
 });
+
+test('--rename-to overrides name regardless of what the source calls itself', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-plugin-');
+  try {
+    const sourcePath = join(dir, 'source-plugin.json');
+    const generatedPath = join(dir, 'generated-plugin.json');
+
+    writeJson(sourcePath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+    writeJson(generatedPath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to', 'suqo-codex-plugins']);
+    const result = readJson(generatedPath);
+
+    assert.equal(result.name, 'suqo-codex-plugins');
+  } finally {
+    cleanup();
+  }
+});
+
+test('without --rename-to, name is left exactly as acplugin produced it', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-plugin-');
+  try {
+    const sourcePath = join(dir, 'source-plugin.json');
+    const generatedPath = join(dir, 'generated-plugin.json');
+
+    writeJson(sourcePath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+    writeJson(generatedPath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+
+    runScript(SCRIPT, [sourcePath, generatedPath]);
+    const result = readJson(generatedPath);
+
+    assert.equal(result.name, 'suqo-claude-plugins');
+  } finally {
+    cleanup();
+  }
+});

@@ -166,3 +166,53 @@ test('exits non-zero with a usage message when arguments are missing', () => {
     return true;
   });
 });
+
+test('--rename-to overrides the entry name and updates the bare-string source to match', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
+  try {
+    const sourcePath = join(dir, 'source-marketplace.json');
+    const generatedPath = join(dir, 'generated-marketplace.json');
+
+    writeJson(sourcePath, {
+      name: 'example-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
+    });
+    writeJson(generatedPath, {
+      name: 'example-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', source: 'suqo-claude-plugins', description: 'x' }],
+    });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, 'suqo-claude-plugins', '--rename-to', 'suqo-cursor-plugins']);
+    const entry = readJson(generatedPath).plugins[0];
+
+    assert.equal(entry.name, 'suqo-cursor-plugins');
+    assert.equal(entry.source, 'suqo-cursor-plugins');
+  } finally {
+    cleanup();
+  }
+});
+
+test('without --rename-to, name and source are left exactly as acplugin produced them', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
+  try {
+    const sourcePath = join(dir, 'source-marketplace.json');
+    const generatedPath = join(dir, 'generated-marketplace.json');
+
+    writeJson(sourcePath, {
+      name: 'example-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
+    });
+    writeJson(generatedPath, {
+      name: 'example-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', source: 'suqo-claude-plugins', description: 'x' }],
+    });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, 'suqo-claude-plugins']);
+    const entry = readJson(generatedPath).plugins[0];
+
+    assert.equal(entry.name, 'suqo-claude-plugins');
+    assert.equal(entry.source, 'suqo-claude-plugins');
+  } finally {
+    cleanup();
+  }
+});

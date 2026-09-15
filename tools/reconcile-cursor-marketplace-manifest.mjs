@@ -14,13 +14,19 @@
  *
  * Usage:
  *   node tools/reconcile-cursor-marketplace-manifest.mjs \
- *     <source-marketplace.json> <generated-cursor-marketplace.json> [plugin-name]
+ *     <source-marketplace.json> <generated-cursor-marketplace.json> [plugin-name] [--rename-to <name>]
  *
  * <source-marketplace.json> is the Claude plugin's own
  * .claude-plugin/marketplace.json - this script reads the matching plugin
  * entry's fields back out of it. If the marketplace lists more than one
  * plugin, pass [plugin-name] to target a specific entry; otherwise the
  * first entry in each file is used.
+ *
+ * --rename-to renames the matched entry's `name` and updates its `source`
+ * to match (Cursor's marketplace entry uses a plain string, not an object
+ * like Codex's) - a deliberate override, not a "fill a gap" fix. Pass the
+ * same --rename-to value given to reconcile-plugin-manifest.mjs so
+ * plugin.json and marketplace.json agree on the new name.
  *
  * Writes the reconciled marketplace.json back in place, with a trailing
  * newline.
@@ -36,10 +42,24 @@ function findEntry(marketplace, targetName) {
     : marketplace.plugins?.[0];
 }
 
+function parseArgs(argv) {
+  const positional = [];
+  let renameTo;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--rename-to') {
+      renameTo = argv[++i];
+    } else {
+      positional.push(argv[i]);
+    }
+  }
+  return { positional, renameTo };
+}
+
 function main() {
-  const [, , sourceMarketplacePath, generatedMarketplacePath, targetName] = process.argv;
+  const { positional, renameTo } = parseArgs(process.argv.slice(2));
+  const [sourceMarketplacePath, generatedMarketplacePath, targetName] = positional;
   if (!sourceMarketplacePath || !generatedMarketplacePath) {
-    console.error('Usage: node tools/reconcile-cursor-marketplace-manifest.mjs <source-marketplace.json> <generated-cursor-marketplace.json> [plugin-name]');
+    console.error('Usage: node tools/reconcile-cursor-marketplace-manifest.mjs <source-marketplace.json> <generated-cursor-marketplace.json> [plugin-name] [--rename-to <name>]');
     process.exit(1);
   }
 
@@ -64,6 +84,15 @@ function main() {
     if (generatedEntry[field] !== sourceEntry[field]) {
       changed.push(`${field}: ${JSON.stringify(generatedEntry[field]) ?? '(absent)'} -> ${JSON.stringify(sourceEntry[field])}`);
       generatedEntry[field] = sourceEntry[field];
+    }
+  }
+
+  if (renameTo !== undefined && generatedEntry.name !== renameTo) {
+    changed.push(`name: ${JSON.stringify(generatedEntry.name)} -> ${JSON.stringify(renameTo)}`);
+    generatedEntry.name = renameTo;
+    if (typeof generatedEntry.source === 'string') {
+      changed.push(`source: ${JSON.stringify(generatedEntry.source)} -> ${JSON.stringify(renameTo)}`);
+      generatedEntry.source = renameTo;
     }
   }
 
