@@ -48,16 +48,16 @@ jobs:
             echo "Issue #$existing is already open for this drift, not creating a duplicate."
             exit 0
           fi
+          {
+            echo "suqo-claude-plugins' main branch has moved since the last sync recorded in \`.source-sync\`."
+            echo ""
+            echo "- Pinned SHA: \`$PINNED\`"
+            echo "- Live SHA: \`$LIVE\`"
+            echo ""
+            echo "Re-run the conversion (acplugin --to cursor + tools/reconcile-*.mjs against the live source), commit the result, and update \`.source-sync\` to \`$LIVE\`."
+            echo ""
+            echo "This issue was opened automatically by the weekly drift check (.github/workflows/check-source-drift.yml). It does not block any PR - verify-sync.yml stays pinned to the recorded SHA until a sync commit updates it."
+          } > /tmp/drift-issue-body.md
           gh issue create \
             --title "suqo-claude-plugins has moved: $PINNED -> $LIVE" \
-            --body "$(cat <<EOF
-suqo-claude-plugins' main branch has moved since the last sync recorded in \`.source-sync\`.
-
-- Pinned SHA: \`$PINNED\`
-- Live SHA: \`$LIVE\`
-
-Re-run the conversion (acplugin --to cursor + tools/reconcile-*.mjs against the live source), commit the result, and update \`.source-sync\` to \`$LIVE\`.
-
-This issue was opened automatically by the weekly drift check (.github/workflows/check-source-drift.yml). It does not block any PR - verify-sync.yml stays pinned to the recorded SHA until a sync commit updates it.
-EOF
-)"
+            --body-file /tmp/drift-issue-body.md
