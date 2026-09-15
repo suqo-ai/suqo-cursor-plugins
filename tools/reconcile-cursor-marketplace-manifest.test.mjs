@@ -32,6 +32,33 @@ test('reconciles category from the source entry onto the generated entry', () =>
   }
 });
 
+test('overwrites category when it is present but wrong, not just when absent', () => {
+  // Every other fixture in this file gives the generated entry no
+  // `category` at all, so none of them can tell "fills when absent" apart
+  // from "overwrites when wrong" - this is the one that can.
+  const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
+  try {
+    const sourcePath = join(dir, 'source-marketplace.json');
+    const generatedPath = join(dir, 'generated-marketplace.json');
+
+    writeJson(sourcePath, {
+      name: 'example-marketplace',
+      plugins: [{ name: 'example-plugin', category: 'sdk' }],
+    });
+    writeJson(generatedPath, {
+      name: 'example-marketplace',
+      plugins: [{ name: 'example-plugin', category: 'productivity' }],
+    });
+
+    runScript(SCRIPT, [sourcePath, generatedPath]);
+    const entry = readJson(generatedPath).plugins[0];
+
+    assert.equal(entry.category, 'sdk');
+  } finally {
+    cleanup();
+  }
+});
+
 test('does not touch fields outside its reconcile list', () => {
   const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
   try {
