@@ -1,0 +1,21 @@
+{
+  "name": "suqo-claude-plugins",
+  "version": "0.4.0",
+  "description": "Skills and SDK usage guides for building apps on top of the SUQO PHP and TypeScript SDKs.",
+  "author": {
+    "name": "SUQO AI",
+    "url": "https://github.com/suqo-ai"
+  },
+  "homepage": "https://github.com/suqo-ai/suqo-claude-plugins",
+  "license": "Apache-2.0",
+  "keywords": [
+    "suqo",
+    "sdk",
+    "php",
+    "typescript",
+    "subscriptions",
+    "payments",
+    "webhooks"
+  ],
+  "skills": "./skills/"
+}

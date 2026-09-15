@@ -1,0 +1,20 @@
+{
+  "name": "suqo-claude-plugins-marketplace",
+  "owner": {
+    "name": "SUQO AI",
+    "url": "https://github.com/suqo-ai"
+  },
+  "metadata": {
+    "description": "SUQO AI marketplace for SUQO Claude plugins and skills.",
+    "version": "0.4.0",
+    "pluginRoot": "plugins"
+  },
+  "plugins": [
+    {
+      "name": "suqo-claude-plugins",
+      "source": "suqo-claude-plugins",
+      "description": "Skills and SDK usage guides for building apps on top of the SUQO PHP and TypeScript SDKs.",
+      "category": "sdk"
+    }
+  ]
+}
