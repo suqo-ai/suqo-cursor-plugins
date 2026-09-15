@@ -1,0 +1,101 @@
+name: Verify Cursor sync
+
+# Two independent checks on every PR to main:
+#  1. test-reconcile-scripts: do tools/reconcile-*.mjs still behave correctly?
+#  2. verify-in-sync-with-source: does what's committed at the repo root
+#     (.cursor-plugin/, skills/) actually match what acplugin + both
+#     reconcile scripts produce from suqo-claude-plugins at the commit
+#     recorded in .source-sync?
+#
+# Pinned to .source-sync's recorded SHA, not suqo-claude-plugins' live
+# main, on purpose: diffing against a moving target means any PR here -
+# even one that only touches a README - goes red the moment someone lands
+# an unrelated change upstream. Pinning makes this job answer only "did
+# this PR introduce drift", not "has upstream moved since our last sync"
+# (that's check-source-drift.yml's job, on a schedule, opening an issue
+# instead of blocking anything). Every sync commit must update
+# .source-sync to the SHA it converted from.
+#
+# Mirrors suqo-codex-plugins' verify-sync.yml - same two bugs it hit
+# (unpinned source, no permissions/concurrency) are avoided here from the
+# start instead of being found by a second review.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-sync-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-reconcile-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run reconcile script tests
+        run: node --test tools/*.test.mjs
+
+  verify-in-sync-with-source:
+    runs-on: ubuntu-latest
+    needs: test-reconcile-scripts
+    steps:
+      - name: Checkout suqo-cursor-plugins (this repo, the PR's branch)
+        uses: actions/checkout@v4
+        with:
+          path: cursor-plugins
+
+      - name: Read the pinned source SHA
+        id: pinned
+        run: echo "sha=$(cat cursor-plugins/.source-sync)" >> "$GITHUB_OUTPUT"
+
+      # No token: — relies on suqo-claude-plugins staying public. If that
+      # changes, this step starts failing with an auth error that won't
+      # obviously point back to this line.
+      - name: Checkout suqo-claude-plugins at the pinned SHA
+        uses: actions/checkout@v4
+        with:
+          repository: suqo-ai/suqo-claude-plugins
+          ref: ${{ steps.pinned.outputs.sha }}
+          path: claude-plugins
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Pulled fresh from npm every run, no lockfile — deliberate: a
+      # lockfile means a package.json, and this repo (and the shipped
+      # plugin) must stay zero-dependency.
+      - name: Convert with acplugin (same pinned version as everywhere else)
+        run: |
+          npx --yes @disdjj/acplugin@1.7.0 convert "$GITHUB_WORKSPACE/claude-plugins" \
+            --all --to cursor -o "$GITHUB_WORKSPACE/scratch"
+
+      - name: Reconcile manifests (same scripts, same order, as any real run)
+        run: |
+          node cursor-plugins/tools/reconcile-plugin-manifest.mjs \
+            claude-plugins/.claude-plugin/plugin.json \
+            scratch/.cursor-plugin/plugin.json
+          node cursor-plugins/tools/reconcile-cursor-marketplace-manifest.mjs \
+            claude-plugins/.claude-plugin/marketplace.json \
+            scratch/.cursor-plugin/marketplace.json
+
+      - name: Diff expected output against what's actually committed
+        run: |
+          set -e
+          if ! diff -rq scratch/.cursor-plugin cursor-plugins/.cursor-plugin; then
+            echo "::error::.cursor-plugin/ in this PR does not match what acplugin + the reconcile scripts produce from suqo-claude-plugins@${{ steps.pinned.outputs.sha }} (the SHA recorded in .source-sync). Re-run the conversion and commit the result - if you're intentionally syncing to a newer source commit, update .source-sync to that SHA too."
+            exit 1
+          fi
+          if ! diff -rq scratch/skills cursor-plugins/skills; then
+            echo "::error::skills/ in this PR does not match what the conversion produces from suqo-claude-plugins@${{ steps.pinned.outputs.sha }}. Re-run the conversion and commit the result."
+            exit 1
+          fi
+          echo "In sync with suqo-ai/suqo-claude-plugins@${{ steps.pinned.outputs.sha }}."

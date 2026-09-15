@@ -1,0 +1,63 @@
+name: Check source drift
+
+# Answers only "has suqo-claude-plugins moved since our last sync" - never
+# blocks a PR (that's verify-sync.yml's job, pinned to .source-sync so it
+# can't be tripped up by this). Runs weekly and opens an issue if the
+# source has moved, so a human decides when to re-sync instead of every
+# open PR going red the moment upstream changes.
+
+on:
+  schedule:
+    - cron: '0 3 * * 1' # weekly, Monday 03:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare the pinned SHA against suqo-claude-plugins' live main
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pinned=$(cat .source-sync)
+          live=$(gh api repos/suqo-ai/suqo-claude-plugins/commits/main --jq '.sha')
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "live=$live" >> "$GITHUB_OUTPUT"
+          if [ "$pinned" != "$live" ]; then
+            echo "drifted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "drifted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open an issue if the source has moved
+        if: steps.check.outputs.drifted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINNED: ${{ steps.check.outputs.pinned }}
+          LIVE: ${{ steps.check.outputs.live }}
+        run: |
+          existing=$(gh issue list --search "\"suqo-claude-plugins has moved\" in:title" --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            echo "Issue #$existing is already open for this drift, not creating a duplicate."
+            exit 0
+          fi
+          gh issue create \
+            --title "suqo-claude-plugins has moved: $PINNED -> $LIVE" \
+            --body "$(cat <<EOF
+suqo-claude-plugins' main branch has moved since the last sync recorded in \`.source-sync\`.
+
+- Pinned SHA: \`$PINNED\`
+- Live SHA: \`$LIVE\`
+
+Re-run the conversion (acplugin --to cursor + tools/reconcile-*.mjs against the live source), commit the result, and update \`.source-sync\` to \`$LIVE\`.
+
+This issue was opened automatically by the weekly drift check (.github/workflows/check-source-drift.yml). It does not block any PR - verify-sync.yml stays pinned to the recorded SHA until a sync commit updates it.
+EOF
+)"
