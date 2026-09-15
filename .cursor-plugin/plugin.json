@@ -1,5 +1,5 @@
 {
-  "name": "suqo-claude-plugins",
+  "name": "suqo-cursor-plugins",
   "version": "0.4.0",
   "description": "Skills and SDK usage guides for building apps on top of the SUQO PHP and TypeScript SDKs.",
   "author": {

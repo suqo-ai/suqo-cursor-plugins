@@ -20,7 +20,16 @@
  * those already came through the marketplace entry correctly.
  *
  * Usage:
- *   node tools/reconcile-plugin-manifest.mjs <source-plugin.json> <generated-plugin.json>
+ *   node tools/reconcile-plugin-manifest.mjs <source-plugin.json> <generated-plugin.json> [--rename-to <name>]
+ *
+ * --rename-to is a separate, deliberate override, not a "fill a gap from
+ * source" fix like the fields above: acplugin always copies `name` straight
+ * from the source with no per-target renaming, so every converted plugin
+ * would otherwise be called "suqo-claude-plugins" regardless of which tool
+ * it's for. Pass --rename-to to force a different, target-specific name -
+ * belongs in the pipeline (this script), not a one-off hand-edit of the
+ * output, so it survives every future regeneration instead of getting
+ * silently reverted by the next one.
  *
  * Writes the reconciled manifest back to <generated-plugin.json> in place.
  */
@@ -47,10 +56,24 @@ function reorder(manifest) {
   return ordered;
 }
 
+function parseArgs(argv) {
+  const positional = [];
+  let renameTo;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--rename-to') {
+      renameTo = argv[++i];
+    } else {
+      positional.push(argv[i]);
+    }
+  }
+  return { positional, renameTo };
+}
+
 function main() {
-  const [, , sourcePath, generatedPath] = process.argv;
+  const { positional, renameTo } = parseArgs(process.argv.slice(2));
+  const [sourcePath, generatedPath] = positional;
   if (!sourcePath || !generatedPath) {
-    console.error('Usage: node tools/reconcile-plugin-manifest.mjs <source-plugin.json> <generated-plugin.json>');
+    console.error('Usage: node tools/reconcile-plugin-manifest.mjs <source-plugin.json> <generated-plugin.json> [--rename-to <name>]');
     process.exit(1);
   }
 
@@ -68,6 +91,11 @@ function main() {
       reconciled[field] = source[field];
       changed.push(`${field}: ${before ?? '(absent)'} -> ${after}`);
     }
+  }
+
+  if (renameTo !== undefined && reconciled.name !== renameTo) {
+    changed.push(`name: ${JSON.stringify(reconciled.name)} -> ${JSON.stringify(renameTo)}`);
+    reconciled.name = renameTo;
   }
 
   const finalManifest = reorder(reconciled);
