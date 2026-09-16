@@ -198,19 +198,23 @@ test('--rename-to overrides name regardless of what the source calls itself', ()
   }
 });
 
-test('--rename-to also rewrites homepage and repository (string form) that embed the old name', () => {
+test('--rename-to also rewrites homepage and repository (string form) pulled in from source', () => {
+  // homepage/repository only ever reach the generated manifest via
+  // FIELDS_TO_RECONCILE copying them from source (acplugin never produces
+  // them itself) - so source carrying them, not just the generated file,
+  // is what a real run actually looks like.
   const { dir, cleanup } = makeTempDir('reconcile-plugin-');
   try {
     const sourcePath = join(dir, 'source-plugin.json');
     const generatedPath = join(dir, 'generated-plugin.json');
 
-    writeJson(sourcePath, { name: 'suqo-claude-plugins', version: '1.0.0' });
-    writeJson(generatedPath, {
+    writeJson(sourcePath, {
       name: 'suqo-claude-plugins',
       version: '1.0.0',
       homepage: 'https://github.com/suqo-ai/suqo-claude-plugins',
       repository: 'https://github.com/suqo-ai/suqo-claude-plugins',
     });
+    writeJson(generatedPath, { name: 'suqo-claude-plugins', version: '1.0.0' });
 
     runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to', 'suqo-codex-plugins']);
     const result = readJson(generatedPath);
@@ -222,18 +226,18 @@ test('--rename-to also rewrites homepage and repository (string form) that embed
   }
 });
 
-test('--rename-to rewrites repository.url (object form) that embeds the old name', () => {
+test('--rename-to rewrites repository.url (object form) pulled in from source', () => {
   const { dir, cleanup } = makeTempDir('reconcile-plugin-');
   try {
     const sourcePath = join(dir, 'source-plugin.json');
     const generatedPath = join(dir, 'generated-plugin.json');
 
-    writeJson(sourcePath, { name: 'suqo-claude-plugins', version: '1.0.0' });
-    writeJson(generatedPath, {
+    writeJson(sourcePath, {
       name: 'suqo-claude-plugins',
       version: '1.0.0',
       repository: { type: 'git', url: 'https://github.com/suqo-ai/suqo-claude-plugins.git' },
     });
+    writeJson(generatedPath, { name: 'suqo-claude-plugins', version: '1.0.0' });
 
     runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to', 'suqo-codex-plugins']);
     const result = readJson(generatedPath);
@@ -245,23 +249,119 @@ test('--rename-to rewrites repository.url (object form) that embeds the old name
   }
 });
 
-test('--rename-to leaves homepage/repository alone when they do not mention the old name', () => {
+test('--rename-to leaves homepage alone when it does not mention the old name', () => {
   const { dir, cleanup } = makeTempDir('reconcile-plugin-');
   try {
     const sourcePath = join(dir, 'source-plugin.json');
     const generatedPath = join(dir, 'generated-plugin.json');
 
-    writeJson(sourcePath, { name: 'suqo-claude-plugins', version: '1.0.0' });
-    writeJson(generatedPath, {
+    writeJson(sourcePath, {
       name: 'suqo-claude-plugins',
       version: '1.0.0',
       homepage: 'https://example.com/unrelated',
     });
+    writeJson(generatedPath, { name: 'suqo-claude-plugins', version: '1.0.0' });
 
     runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to', 'suqo-codex-plugins']);
     const result = readJson(generatedPath);
 
     assert.equal(result.homepage, 'https://example.com/unrelated');
+  } finally {
+    cleanup();
+  }
+});
+
+test('running --rename-to twice in a row is a true no-op the second time (idempotency)', () => {
+  // Regression test for a real bug: an earlier version derived the "old
+  // name" to rewrite from the generated manifest's own `name` field, which
+  // had already become the new name after run 1 - so a second run's
+  // rewrite pass silently no-op'd while the plain source-copy above it
+  // kept re-overwriting homepage with the raw, unrenamed value. The script
+  // converged on the WRONG value and then reported "No fields needed
+  // reconciling" — clean-looking, but broken. This test would have caught
+  // that: it asserts the file is byte-identical after a second run, not
+  // just that some fields look right.
+  const { dir, cleanup } = makeTempDir('reconcile-plugin-');
+  try {
+    const sourcePath = join(dir, 'source-plugin.json');
+    const generatedPath = join(dir, 'generated-plugin.json');
+
+    writeJson(sourcePath, {
+      name: 'suqo-claude-plugins',
+      version: '0.4.0',
+      homepage: 'https://github.com/suqo-ai/suqo-claude-plugins',
+      repository: { type: 'git', url: 'https://github.com/suqo-ai/suqo-claude-plugins.git' },
+    });
+    writeJson(generatedPath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to', 'suqo-codex-plugins']);
+    const afterFirstRun = readText(generatedPath);
+
+    const { stdout } = runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to', 'suqo-codex-plugins']);
+    const afterSecondRun = readText(generatedPath);
+
+    assert.match(stdout, /No fields needed reconciling/);
+    assert.equal(afterSecondRun, afterFirstRun);
+
+    const result = readJson(generatedPath);
+    assert.equal(result.homepage, 'https://github.com/suqo-ai/suqo-codex-plugins');
+    assert.equal(result.repository.url, 'https://github.com/suqo-ai/suqo-codex-plugins.git');
+  } finally {
+    cleanup();
+  }
+});
+
+test('rejects "--flag=value" syntax instead of silently ignoring it', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-plugin-');
+  try {
+    const sourcePath = join(dir, 'source-plugin.json');
+    const generatedPath = join(dir, 'generated-plugin.json');
+    writeJson(sourcePath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+    writeJson(generatedPath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+
+    assert.throws(() => runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to=suqo-codex-plugins']), (err) => {
+      assert.equal(err.status, 1);
+      assert.match(err.stderr.toString(), /Unsupported "--flag=value" syntax/);
+      return true;
+    });
+    // Confirms it didn't half-apply anything before erroring.
+    assert.equal(readJson(generatedPath).name, 'suqo-claude-plugins');
+  } finally {
+    cleanup();
+  }
+});
+
+test('rejects an unrecognized flag instead of silently treating it as positional', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-plugin-');
+  try {
+    const sourcePath = join(dir, 'source-plugin.json');
+    const generatedPath = join(dir, 'generated-plugin.json');
+    writeJson(sourcePath, { name: 'x' });
+    writeJson(generatedPath, { name: 'x' });
+
+    assert.throws(() => runScript(SCRIPT, [sourcePath, generatedPath, '--rename-two', 'y']), (err) => {
+      assert.equal(err.status, 1);
+      assert.match(err.stderr.toString(), /Unrecognized flag: "--rename-two"/);
+      return true;
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('rejects --rename-to with a missing value', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-plugin-');
+  try {
+    const sourcePath = join(dir, 'source-plugin.json');
+    const generatedPath = join(dir, 'generated-plugin.json');
+    writeJson(sourcePath, { name: 'x' });
+    writeJson(generatedPath, { name: 'x' });
+
+    assert.throws(() => runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to']), (err) => {
+      assert.equal(err.status, 1);
+      assert.match(err.stderr.toString(), /Flag "--rename-to" requires a value/);
+      return true;
+    });
   } finally {
     cleanup();
   }
