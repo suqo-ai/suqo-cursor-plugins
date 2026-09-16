@@ -19,9 +19,18 @@ name: Verify Cursor sync
 # Mirrors suqo-codex-plugins' verify-sync.yml - same two bugs it hit
 # (unpinned source, no permissions/concurrency) are avoided here from the
 # start instead of being found by a second review.
+#
+# push: branches: [main] - added after a real gap found on
+# suqo-antigravity-plugins: this workflow used to run on pull_request only,
+# so a commit pushed straight to main never got checked at all. Direct
+# pushes to main should be rare, but when they happen they need the same
+# check a PR gets - branch protection requiring PRs would be the more
+# complete fix, but isn't something a workflow file can enforce on its own.
 
 on:
   pull_request:
+    branches: [main]
+  push:
     branches: [main]
   workflow_dispatch: {}
 
@@ -81,6 +90,9 @@ jobs:
       # --rename-to: acplugin always names the plugin after the source
       # ("suqo-claude-plugins"), regardless of target tool - renamed here,
       # in the pipeline, so it can't get silently reverted by a future run.
+      # --description: acplugin passes metadata.description through
+      # untouched from source, which says "...SUQO Claude plugins and
+      # skills." - overridden here too, for the same reason.
       - name: Reconcile manifests (same scripts, same order, as any real run)
         run: |
           node cursor-plugins/tools/reconcile-plugin-manifest.mjs \
@@ -90,7 +102,8 @@ jobs:
           node cursor-plugins/tools/reconcile-cursor-marketplace-manifest.mjs \
             claude-plugins/.claude-plugin/marketplace.json \
             scratch/.cursor-plugin/marketplace.json \
-            suqo-claude-plugins --rename-to suqo-cursor-plugins
+            suqo-claude-plugins --rename-to suqo-cursor-plugins \
+            --description "SUQO AI marketplace for SUQO Cursor plugins and skills."
 
       - name: Diff expected output against what's actually committed
         run: |
