@@ -217,6 +217,40 @@ test('--rename-to also rewrites the marketplace top-level name', () => {
   }
 });
 
+test('does not compound the marketplace-name rewrite when --rename-to itself contains the old name', () => {
+  // Regression test for a real bug (identical to the one fixed on the
+  // sibling suqo-codex-plugins repo): the rewrite used to fire whenever
+  // the current value contained the old name, with no check for whether
+  // it already contained the new one too. If --rename-to's value itself
+  // embeds the old name as a substring, a second run's marketplace name
+  // already contains the old name as a prefix of the *already-rewritten*
+  // value, so the naive rewrite fired again and compounded.
+  const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
+  try {
+    const sourcePath = join(dir, 'source-marketplace.json');
+    const generatedPath = join(dir, 'generated-marketplace.json');
+
+    writeJson(sourcePath, {
+      name: 'example-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
+    });
+    writeJson(generatedPath, {
+      name: 'suqo-claude-plugins-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', source: 'suqo-claude-plugins', description: 'x' }],
+    });
+
+    const args = [sourcePath, generatedPath, 'suqo-claude-plugins', '--rename-to', 'suqo-claude-plugins-v2'];
+    runScript(SCRIPT, args);
+    assert.equal(readJson(generatedPath).name, 'suqo-claude-plugins-v2-marketplace');
+
+    // Three more runs - a naive fix would compound "-v2" onto the name again each time.
+    for (let i = 0; i < 3; i++) runScript(SCRIPT, args);
+    assert.equal(readJson(generatedPath).name, 'suqo-claude-plugins-v2-marketplace');
+  } finally {
+    cleanup();
+  }
+});
+
 test('running --rename-to twice in a row is a true no-op the second time (idempotency)', () => {
   // Regression test for a real bug reported against the sibling
   // suqo-codex-plugins/suqo-antigravity-plugins scripts and reproduced

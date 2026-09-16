@@ -48,6 +48,17 @@
  * the (already-renamed) entry and correctly reports no further changes
  * needed, rather than failing. See the idempotency test.
  *
+ * The marketplace-name rewrite is also guarded against compounding: it
+ * only fires when the current value contains the old name but NOT the new
+ * one already. This rewrite edits a value that's already been through
+ * this same script before, so if --rename-to's value ever itself contains
+ * the old name as a substring (e.g. renaming "suqo-claude-plugins" to
+ * "suqo-claude-plugins-v2"), a naive unconditional split/join would
+ * re-match on a second run and compound: "...-marketplace" ->
+ * "...-v2-marketplace" -> "...-v2-v2-marketplace". Found by review,
+ * reproduced with exactly that pair on the sibling suqo-codex-plugins
+ * repo (identical rewrite shape), fixed the same way here.
+ *
  * Writes the reconciled marketplace.json back in place, with a trailing
  * newline.
  */
@@ -142,13 +153,16 @@ function main() {
         generatedEntry.source = renameTo;
       }
 
-      if (typeof generatedMarketplace.name === 'string' && generatedMarketplace.name.includes(oldName)) {
+      // Only rewrite a value that still contains the old name and does NOT
+      // already contain the new one - see the doc comment above for why
+      // the second half of that check exists.
+      if (
+        typeof generatedMarketplace.name === 'string' &&
+        generatedMarketplace.name.includes(oldName) && !generatedMarketplace.name.includes(renameTo)
+      ) {
         const before = generatedMarketplace.name;
-        const after = before.split(oldName).join(renameTo);
-        if (after !== before) {
-          generatedMarketplace.name = after;
-          changed.push(`marketplace name: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
-        }
+        generatedMarketplace.name = before.split(oldName).join(renameTo);
+        changed.push(`marketplace name: ${JSON.stringify(before)} -> ${JSON.stringify(generatedMarketplace.name)}`);
       }
     }
   }
