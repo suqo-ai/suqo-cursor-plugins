@@ -72,6 +72,31 @@
  * already-rewritten?" has neither failure mode: the source is identical
  * no matter how many times this has already run.
  *
+ * --description <text>: overrides `metadata.description` unconditionally.
+ * acplugin passes this through untouched from the source marketplace's own
+ * top-level description, which says "...SUQO Claude plugins and skills." -
+ * the same confusing-branding bug this whole rename exists to fix, just in
+ * a field neither this script nor reconcile-plugin-manifest.mjs previously
+ * looked at. Not a "fill a gap" fix (the field is never actually missing) -
+ * an explicit override, same shape as --rename-to itself.
+ *
+ * Also fixes a real, pre-existing acplugin bug found by review (present in
+ * acplugin's raw output before this script or --rename-to ever runs, not
+ * introduced by either): acplugin sets `metadata.pluginRoot: "plugins"` and
+ * each entry's `source` to the plugin's bare name (e.g.
+ * "suqo-claude-plugins") - Cursor's marketplace resolver joins the two
+ * (stripping "./" from `source`, then `${pluginRoot}/${source}`), which
+ * resolves to a `plugins/<name>` path that doesn't exist in this repo -
+ * the plugin's actual files live at the repo root (`.cursor-plugin/`,
+ * `skills/`), not nested under a `plugins/` folder. `cursor-agent plugin
+ * marketplace add` fails to resolve the entry as a result. Fixed
+ * unconditionally (not gated on --rename-to, since it's not a renaming
+ * concern): `source` is always forced to `"./"` (matching what upstream's
+ * own `.claude-plugin/marketplace.json` correctly has before acplugin's
+ * conversion breaks it), and `metadata.pluginRoot` is dropped entirely -
+ * without it, Cursor's resolver uses `source` directly with no prefix
+ * joined on, so `"./"` correctly means "this repo's own root".
+ *
  * Writes the reconciled marketplace.json back in place, with a trailing
  * newline.
  */
@@ -79,7 +104,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const ENTRY_FIELDS_TO_RECONCILE = ['category'];
-const KNOWN_FLAGS = new Set(['--rename-to']);
+const KNOWN_FLAGS = new Set(['--rename-to', '--description']);
 
 function findEntry(marketplace, targetName, renameTo) {
   if (!targetName) return marketplace.plugins?.[0];
@@ -114,14 +139,14 @@ function parseArgs(argv) {
       positional.push(arg);
     }
   }
-  return { positional, renameTo: flags['--rename-to'] };
+  return { positional, renameTo: flags['--rename-to'], description: flags['--description'] };
 }
 
 function main() {
-  const { positional, renameTo } = parseArgs(process.argv.slice(2));
+  const { positional, renameTo, description } = parseArgs(process.argv.slice(2));
   const [sourceMarketplacePath, generatedMarketplacePath, targetName] = positional;
   if (!sourceMarketplacePath || !generatedMarketplacePath) {
-    console.error('Usage: node tools/reconcile-cursor-marketplace-manifest.mjs <source-marketplace.json> <generated-cursor-marketplace.json> [plugin-name] [--rename-to <name>]');
+    console.error('Usage: node tools/reconcile-cursor-marketplace-manifest.mjs <source-marketplace.json> <generated-cursor-marketplace.json> [plugin-name] [--rename-to <name>] [--description <text>]');
     process.exit(1);
   }
 
@@ -152,19 +177,30 @@ function main() {
     }
   }
 
+  // Fixes acplugin's own path-resolution bug, unconditionally - not a
+  // renaming concern, so not gated on --rename-to. See the doc comment
+  // above for the full explanation.
+  if (generatedMarketplace.metadata && 'pluginRoot' in generatedMarketplace.metadata) {
+    changed.push(`metadata.pluginRoot: ${JSON.stringify(generatedMarketplace.metadata.pluginRoot)} -> removed`);
+    delete generatedMarketplace.metadata.pluginRoot;
+  }
+  if (typeof generatedEntry.source === 'string' && generatedEntry.source !== './') {
+    changed.push(`source: ${JSON.stringify(generatedEntry.source)} -> ${JSON.stringify('./')}`);
+    generatedEntry.source = './';
+  }
+
+  if (description !== undefined && generatedMarketplace.metadata && generatedMarketplace.metadata.description !== description) {
+    changed.push(`metadata.description: ${JSON.stringify(generatedMarketplace.metadata.description)} -> ${JSON.stringify(description)}`);
+    generatedMarketplace.metadata.description = description;
+  }
+
   if (renameTo !== undefined) {
     // Prefer the CLI-supplied pre-rename name (stable across runs) over
     // generatedEntry.name (which becomes the *new* name after the first run).
     const entryOldName = targetName ?? generatedEntry.name;
-    if (entryOldName !== renameTo) {
-      if (generatedEntry.name !== renameTo) {
-        changed.push(`name: ${JSON.stringify(generatedEntry.name)} -> ${JSON.stringify(renameTo)}`);
-        generatedEntry.name = renameTo;
-      }
-      if (typeof generatedEntry.source === 'string' && generatedEntry.source !== renameTo) {
-        changed.push(`source: ${JSON.stringify(generatedEntry.source)} -> ${JSON.stringify(renameTo)}`);
-        generatedEntry.source = renameTo;
-      }
+    if (entryOldName !== renameTo && generatedEntry.name !== renameTo) {
+      changed.push(`name: ${JSON.stringify(generatedEntry.name)} -> ${JSON.stringify(renameTo)}`);
+      generatedEntry.name = renameTo;
     }
 
     // Marketplace-level rewrite: always derived fresh from the untouched

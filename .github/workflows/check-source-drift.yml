@@ -36,28 +36,39 @@ jobs:
             echo "drifted=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Open an issue if the source has moved
+      # Refreshes an already-open issue's body instead of just skipping it,
+      # and keeps the title free of SHAs (a stable pointer, not a record of
+      # any one drift event) - both fixed on suqo-antigravity-plugins after
+      # the same bug: the original version exited as soon as any open
+      # issue existed, so if the source drifted again while that issue was
+      # still open, whatever SHA was recorded (body or title) went stale -
+      # anyone acting on the issue later would re-sync to the wrong
+      # commit. Editing the body every run keeps it accurate no matter how
+      # many weeks pass before someone re-syncs.
+      - name: Open or refresh the drift issue
         if: steps.check.outputs.drifted == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PINNED: ${{ steps.check.outputs.pinned }}
           LIVE: ${{ steps.check.outputs.live }}
         run: |
-          existing=$(gh issue list --search "\"suqo-claude-plugins has moved\" in:title" --state open --json number --jq '.[0].number')
-          if [ -n "$existing" ]; then
-            echo "Issue #$existing is already open for this drift, not creating a duplicate."
-            exit 0
-          fi
           {
             echo "suqo-claude-plugins' main branch has moved since the last sync recorded in \`.source-sync\`."
             echo ""
             echo "- Pinned SHA: \`$PINNED\`"
-            echo "- Live SHA: \`$LIVE\`"
+            echo "- Live SHA (as of this check): \`$LIVE\`"
             echo ""
             echo "Re-run the conversion (acplugin --to cursor + tools/reconcile-*.mjs against the live source), commit the result, and update \`.source-sync\` to \`$LIVE\`."
             echo ""
-            echo "This issue was opened automatically by the weekly drift check (.github/workflows/check-source-drift.yml). It does not block any PR - verify-sync.yml stays pinned to the recorded SHA until a sync commit updates it."
+            echo "This issue is opened and kept up to date automatically by the weekly drift check (.github/workflows/check-source-drift.yml) - its body reflects the live SHA as of the most recent run, not necessarily the one from when it was first opened. It does not block any PR - verify-sync.yml stays pinned to the recorded SHA until a sync commit updates it."
           } > /tmp/drift-issue-body.md
-          gh issue create \
-            --title "suqo-claude-plugins has moved: $PINNED -> $LIVE" \
-            --body-file /tmp/drift-issue-body.md
+
+          existing=$(gh issue list --search "\"suqo-claude-plugins has moved past .source-sync\" in:title" --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file /tmp/drift-issue-body.md
+            echo "Refreshed issue #$existing with the current live SHA ($LIVE)."
+          else
+            gh issue create \
+              --title "suqo-claude-plugins has moved past .source-sync" \
+              --body-file /tmp/drift-issue-body.md
+          fi

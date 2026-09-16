@@ -5,14 +5,13 @@
     "url": "https://github.com/suqo-ai"
   },
   "metadata": {
-    "description": "SUQO AI marketplace for SUQO Claude plugins and skills.",
-    "version": "0.4.0",
-    "pluginRoot": "plugins"
+    "description": "SUQO AI marketplace for SUQO Cursor plugins and skills.",
+    "version": "0.4.0"
   },
   "plugins": [
     {
       "name": "suqo-cursor-plugins",
-      "source": "suqo-cursor-plugins",
+      "source": "./",
       "description": "Skills and SDK usage guides for building apps on top of the SUQO PHP and TypeScript SDKs.",
       "category": "sdk"
     }
