@@ -192,6 +192,55 @@ test('--rename-to overrides the entry name and updates the bare-string source to
   }
 });
 
+test('--rename-to also rewrites the marketplace top-level name', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
+  try {
+    const sourcePath = join(dir, 'source-marketplace.json');
+    const generatedPath = join(dir, 'generated-marketplace.json');
+
+    writeJson(sourcePath, {
+      name: 'example-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
+    });
+    writeJson(generatedPath, {
+      name: 'suqo-claude-plugins-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', source: 'suqo-claude-plugins', description: 'x' }],
+    });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, 'suqo-claude-plugins', '--rename-to', 'suqo-cursor-plugins']);
+    const result = readJson(generatedPath);
+
+    assert.equal(result.name, 'suqo-cursor-plugins-marketplace');
+    assert.equal(result.plugins[0].name, 'suqo-cursor-plugins');
+  } finally {
+    cleanup();
+  }
+});
+
+test('--rename-to leaves an unrelated marketplace name alone', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
+  try {
+    const sourcePath = join(dir, 'source-marketplace.json');
+    const generatedPath = join(dir, 'generated-marketplace.json');
+
+    writeJson(sourcePath, {
+      name: 'example-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
+    });
+    writeJson(generatedPath, {
+      name: 'acme-tools-marketplace',
+      plugins: [{ name: 'suqo-claude-plugins', source: 'suqo-claude-plugins', description: 'x' }],
+    });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, 'suqo-claude-plugins', '--rename-to', 'suqo-cursor-plugins']);
+    const result = readJson(generatedPath);
+
+    assert.equal(result.name, 'acme-tools-marketplace');
+  } finally {
+    cleanup();
+  }
+});
+
 test('without --rename-to, name and source are left exactly as acplugin produced them', () => {
   const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
   try {

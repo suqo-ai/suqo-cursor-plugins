@@ -28,6 +28,14 @@
  * same --rename-to value given to reconcile-plugin-manifest.mjs so
  * plugin.json and marketplace.json agree on the new name.
  *
+ * It also rewrites any occurrence of the entry's *old* name inside the
+ * marketplace's own top-level `name` (acplugin passes this through
+ * unchanged from the source, so it otherwise keeps saying e.g.
+ * "suqo-claude-plugins-marketplace" even after the listed plugin has
+ * been correctly renamed - exactly the confusing-branding bug this whole
+ * rename exists to fix). Found by review, not hypothetical: this is the
+ * one part of the marketplace file --rename-to originally missed.
+ *
  * Writes the reconciled marketplace.json back in place, with a trailing
  * newline.
  */
@@ -87,12 +95,21 @@ function main() {
     }
   }
 
-  if (renameTo !== undefined && generatedEntry.name !== renameTo) {
-    changed.push(`name: ${JSON.stringify(generatedEntry.name)} -> ${JSON.stringify(renameTo)}`);
-    generatedEntry.name = renameTo;
-    if (typeof generatedEntry.source === 'string') {
-      changed.push(`source: ${JSON.stringify(generatedEntry.source)} -> ${JSON.stringify(renameTo)}`);
-      generatedEntry.source = renameTo;
+  if (renameTo !== undefined) {
+    const oldName = generatedEntry.name;
+    if (oldName !== renameTo) {
+      changed.push(`name: ${JSON.stringify(oldName)} -> ${JSON.stringify(renameTo)}`);
+      generatedEntry.name = renameTo;
+      if (typeof generatedEntry.source === 'string') {
+        changed.push(`source: ${JSON.stringify(generatedEntry.source)} -> ${JSON.stringify(renameTo)}`);
+        generatedEntry.source = renameTo;
+      }
+
+      if (typeof generatedMarketplace.name === 'string' && generatedMarketplace.name.includes(oldName)) {
+        const before = generatedMarketplace.name;
+        generatedMarketplace.name = before.split(oldName).join(renameTo);
+        changed.push(`marketplace name: ${JSON.stringify(before)} -> ${JSON.stringify(generatedMarketplace.name)}`);
+      }
     }
   }
 

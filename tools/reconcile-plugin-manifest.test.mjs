@@ -198,6 +198,75 @@ test('--rename-to overrides name regardless of what the source calls itself', ()
   }
 });
 
+test('--rename-to also rewrites homepage and repository (string form) that embed the old name', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-plugin-');
+  try {
+    const sourcePath = join(dir, 'source-plugin.json');
+    const generatedPath = join(dir, 'generated-plugin.json');
+
+    writeJson(sourcePath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+    writeJson(generatedPath, {
+      name: 'suqo-claude-plugins',
+      version: '1.0.0',
+      homepage: 'https://github.com/suqo-ai/suqo-claude-plugins',
+      repository: 'https://github.com/suqo-ai/suqo-claude-plugins',
+    });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to', 'suqo-codex-plugins']);
+    const result = readJson(generatedPath);
+
+    assert.equal(result.homepage, 'https://github.com/suqo-ai/suqo-codex-plugins');
+    assert.equal(result.repository, 'https://github.com/suqo-ai/suqo-codex-plugins');
+  } finally {
+    cleanup();
+  }
+});
+
+test('--rename-to rewrites repository.url (object form) that embeds the old name', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-plugin-');
+  try {
+    const sourcePath = join(dir, 'source-plugin.json');
+    const generatedPath = join(dir, 'generated-plugin.json');
+
+    writeJson(sourcePath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+    writeJson(generatedPath, {
+      name: 'suqo-claude-plugins',
+      version: '1.0.0',
+      repository: { type: 'git', url: 'https://github.com/suqo-ai/suqo-claude-plugins.git' },
+    });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to', 'suqo-codex-plugins']);
+    const result = readJson(generatedPath);
+
+    assert.equal(result.repository.url, 'https://github.com/suqo-ai/suqo-codex-plugins.git');
+    assert.equal(result.repository.type, 'git');
+  } finally {
+    cleanup();
+  }
+});
+
+test('--rename-to leaves homepage/repository alone when they do not mention the old name', () => {
+  const { dir, cleanup } = makeTempDir('reconcile-plugin-');
+  try {
+    const sourcePath = join(dir, 'source-plugin.json');
+    const generatedPath = join(dir, 'generated-plugin.json');
+
+    writeJson(sourcePath, { name: 'suqo-claude-plugins', version: '1.0.0' });
+    writeJson(generatedPath, {
+      name: 'suqo-claude-plugins',
+      version: '1.0.0',
+      homepage: 'https://example.com/unrelated',
+    });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, '--rename-to', 'suqo-codex-plugins']);
+    const result = readJson(generatedPath);
+
+    assert.equal(result.homepage, 'https://example.com/unrelated');
+  } finally {
+    cleanup();
+  }
+});
+
 test('without --rename-to, name is left exactly as acplugin produced it', () => {
   const { dir, cleanup } = makeTempDir('reconcile-plugin-');
   try {
