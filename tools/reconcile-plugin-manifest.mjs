@@ -31,6 +31,15 @@
  * output, so it survives every future regeneration instead of getting
  * silently reverted by the next one.
  *
+ * --rename-to also rewrites `homepage`/`repository` (or `repository.url`)
+ * when they embed the old name as a GitHub repo-URL path segment (e.g.
+ * https://github.com/suqo-ai/suqo-claude-plugins -> .../suqo-codex-plugins).
+ * FIELDS_TO_RECONCILE above copies these straight from the source with no
+ * awareness of the rename, so without this a renamed plugin would still
+ * ship a homepage link pointing at the source repo instead of its own -
+ * a real bug found by review, not hypothetical (confirmed present in the
+ * first version of this rename before this fix).
+ *
  * Writes the reconciled manifest back to <generated-plugin.json> in place.
  */
 
@@ -93,9 +102,32 @@ function main() {
     }
   }
 
-  if (renameTo !== undefined && reconciled.name !== renameTo) {
-    changed.push(`name: ${JSON.stringify(reconciled.name)} -> ${JSON.stringify(renameTo)}`);
-    reconciled.name = renameTo;
+  if (renameTo !== undefined) {
+    const oldName = reconciled.name;
+    if (oldName !== renameTo) {
+      changed.push(`name: ${JSON.stringify(oldName)} -> ${JSON.stringify(renameTo)}`);
+      reconciled.name = renameTo;
+
+      const rename = (str) => str.split(oldName).join(renameTo);
+
+      if (typeof reconciled.homepage === 'string' && reconciled.homepage.includes(oldName)) {
+        const before = reconciled.homepage;
+        reconciled.homepage = rename(before);
+        changed.push(`homepage: ${JSON.stringify(before)} -> ${JSON.stringify(reconciled.homepage)}`);
+      }
+      if (typeof reconciled.repository === 'string' && reconciled.repository.includes(oldName)) {
+        const before = reconciled.repository;
+        reconciled.repository = rename(before);
+        changed.push(`repository: ${JSON.stringify(before)} -> ${JSON.stringify(reconciled.repository)}`);
+      } else if (
+        reconciled.repository && typeof reconciled.repository === 'object' &&
+        typeof reconciled.repository.url === 'string' && reconciled.repository.url.includes(oldName)
+      ) {
+        const before = reconciled.repository.url;
+        reconciled.repository.url = rename(before);
+        changed.push(`repository.url: ${JSON.stringify(before)} -> ${JSON.stringify(reconciled.repository.url)}`);
+      }
+    }
   }
 
   const finalManifest = reorder(reconciled);
