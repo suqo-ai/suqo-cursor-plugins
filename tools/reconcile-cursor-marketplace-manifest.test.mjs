@@ -174,11 +174,11 @@ test('--rename-to overrides the entry name and updates the bare-string source to
     const generatedPath = join(dir, 'generated-marketplace.json');
 
     writeJson(sourcePath, {
-      name: 'example-marketplace',
+      name: 'suqo-claude-plugins-marketplace',
       plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
     });
     writeJson(generatedPath, {
-      name: 'example-marketplace',
+      name: 'suqo-claude-plugins-marketplace',
       plugins: [{ name: 'suqo-claude-plugins', source: 'suqo-claude-plugins', description: 'x' }],
     });
 
@@ -199,7 +199,7 @@ test('--rename-to also rewrites the marketplace top-level name', () => {
     const generatedPath = join(dir, 'generated-marketplace.json');
 
     writeJson(sourcePath, {
-      name: 'example-marketplace',
+      name: 'suqo-claude-plugins-marketplace',
       plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
     });
     writeJson(generatedPath, {
@@ -217,21 +217,23 @@ test('--rename-to also rewrites the marketplace top-level name', () => {
   }
 });
 
-test('does not compound the marketplace-name rewrite when --rename-to itself contains the old name', () => {
-  // Regression test for a real bug (identical to the one fixed on the
-  // sibling suqo-codex-plugins repo): the rewrite used to fire whenever
-  // the current value contained the old name, with no check for whether
-  // it already contained the new one too. If --rename-to's value itself
-  // embeds the old name as a substring, a second run's marketplace name
-  // already contains the old name as a prefix of the *already-rewritten*
-  // value, so the naive rewrite fired again and compounded.
+test('does not compound the marketplace-name rewrite across repeated runs when --rename-to itself contains the old name', () => {
+  // Regression test #1 (identical to the one fixed on the sibling
+  // suqo-codex-plugins repo): an earlier version anchored the rewrite on
+  // the *generated* marketplace's own name, which already reflects any
+  // prior run's changes. If --rename-to's value itself embeds the old
+  // name as a substring, a second run's marketplace name already contains
+  // the old name as a prefix of the *already-rewritten* value, so a naive
+  // rewrite fired again and compounded. Fixed by deriving the expected
+  // value fresh from sourceMarketplace.name every run (which never
+  // changes) instead of mutating the generated value in place.
   const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
   try {
     const sourcePath = join(dir, 'source-marketplace.json');
     const generatedPath = join(dir, 'generated-marketplace.json');
 
     writeJson(sourcePath, {
-      name: 'example-marketplace',
+      name: 'suqo-claude-plugins-marketplace',
       plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
     });
     writeJson(generatedPath, {
@@ -246,6 +248,40 @@ test('does not compound the marketplace-name rewrite when --rename-to itself con
     // Three more runs - a naive fix would compound "-v2" onto the name again each time.
     for (let i = 0; i < 3; i++) runScript(SCRIPT, args);
     assert.equal(readJson(generatedPath).name, 'suqo-claude-plugins-v2-marketplace');
+  } finally {
+    cleanup();
+  }
+});
+
+test('does not silently skip a needed rewrite just because the new name already appears somewhere unrelated', () => {
+  // Regression test #2 (identical to the one fixed on the sibling
+  // suqo-codex-plugins repo): the fix for regression #1 above (in an
+  // earlier, now-replaced version) added a check that skipped the rewrite
+  // whenever the *new* name was already present in the current value -
+  // which broke exactly this case: a genuinely first run, where the new
+  // name coincidentally already appears in the marketplace name for
+  // reasons unrelated to any prior run. Reproduced: renaming "alpha" ->
+  // "beta" against a marketplace name "alpha-beta-thing-marketplace"
+  // (never touched by this script before) silently left it unchanged
+  // instead of producing "beta-beta-thing-marketplace".
+  const { dir, cleanup } = makeTempDir('reconcile-cursor-marketplace-');
+  try {
+    const sourcePath = join(dir, 'source-marketplace.json');
+    const generatedPath = join(dir, 'generated-marketplace.json');
+
+    writeJson(sourcePath, {
+      name: 'alpha-beta-thing-marketplace',
+      plugins: [{ name: 'alpha' }],
+    });
+    writeJson(generatedPath, {
+      name: 'alpha-beta-thing-marketplace',
+      plugins: [{ name: 'alpha', source: 'alpha', description: 'x' }],
+    });
+
+    runScript(SCRIPT, [sourcePath, generatedPath, 'alpha', '--rename-to', 'beta']);
+    const result = readJson(generatedPath);
+
+    assert.equal(result.name, 'beta-beta-thing-marketplace');
   } finally {
     cleanup();
   }
@@ -267,7 +303,7 @@ test('running --rename-to twice in a row is a true no-op the second time (idempo
     const generatedPath = join(dir, 'generated-marketplace.json');
 
     writeJson(sourcePath, {
-      name: 'example-marketplace',
+      name: 'suqo-claude-plugins-marketplace',
       plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
     });
     writeJson(generatedPath, {
@@ -336,8 +372,10 @@ test('--rename-to leaves an unrelated marketplace name alone', () => {
     const sourcePath = join(dir, 'source-marketplace.json');
     const generatedPath = join(dir, 'generated-marketplace.json');
 
+    // The source marketplace's own name has no relation to the plugin's
+    // name either - nothing for this script to derive a rename from.
     writeJson(sourcePath, {
-      name: 'example-marketplace',
+      name: 'acme-tools-marketplace',
       plugins: [{ name: 'suqo-claude-plugins', category: 'sdk' }],
     });
     writeJson(generatedPath, {

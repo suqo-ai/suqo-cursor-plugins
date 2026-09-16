@@ -48,16 +48,29 @@
  * the (already-renamed) entry and correctly reports no further changes
  * needed, rather than failing. See the idempotency test.
  *
- * The marketplace-name rewrite is also guarded against compounding: it
- * only fires when the current value contains the old name but NOT the new
- * one already. This rewrite edits a value that's already been through
- * this same script before, so if --rename-to's value ever itself contains
- * the old name as a substring (e.g. renaming "suqo-claude-plugins" to
- * "suqo-claude-plugins-v2"), a naive unconditional split/join would
- * re-match on a second run and compound: "...-marketplace" ->
- * "...-v2-marketplace" -> "...-v2-v2-marketplace". Found by review,
- * reproduced with exactly that pair on the sibling suqo-codex-plugins
- * repo (identical rewrite shape), fixed the same way here.
+ * The marketplace-name rewrite is derived fresh from
+ * <source-marketplace.json>'s own top-level `name` every run, rather than
+ * by mutating `generatedMarketplace.name` in place - mirroring
+ * reconcile-plugin-manifest.mjs's homepage/repository pattern. An earlier
+ * version instead edited the generated value in place using
+ * substring-presence heuristics ("does this look already renamed?"), and
+ * that approach had two real bugs found by review, both reproduced before
+ * fixing:
+ *
+ *   1. Compounding: if --rename-to's value ever itself contained the old
+ *      name as a substring (e.g. "suqo-claude-plugins" -> "suqo-claude-
+ *      plugins-v2"), the heuristic re-matched on every subsequent run and
+ *      kept re-appending: "...-marketplace" -> "...-v2-marketplace" ->
+ *      "...-v2-v2-marketplace".
+ *   2. False negative: patching (1) by also requiring the new name be
+ *      *absent* broke the case where the new name coincidentally already
+ *      appeared in the marketplace name for unrelated reasons on a
+ *      genuinely first run - the needed rewrite silently never happened.
+ *
+ * Deriving the expected value from `sourceMarketplace.name` (loaded above,
+ * never mutated) instead of asking "does the current value look
+ * already-rewritten?" has neither failure mode: the source is identical
+ * no matter how many times this has already run.
  *
  * Writes the reconciled marketplace.json back in place, with a trailing
  * newline.
@@ -142,8 +155,8 @@ function main() {
   if (renameTo !== undefined) {
     // Prefer the CLI-supplied pre-rename name (stable across runs) over
     // generatedEntry.name (which becomes the *new* name after the first run).
-    const oldName = targetName ?? generatedEntry.name;
-    if (oldName !== renameTo) {
+    const entryOldName = targetName ?? generatedEntry.name;
+    if (entryOldName !== renameTo) {
       if (generatedEntry.name !== renameTo) {
         changed.push(`name: ${JSON.stringify(generatedEntry.name)} -> ${JSON.stringify(renameTo)}`);
         generatedEntry.name = renameTo;
@@ -152,17 +165,20 @@ function main() {
         changed.push(`source: ${JSON.stringify(generatedEntry.source)} -> ${JSON.stringify(renameTo)}`);
         generatedEntry.source = renameTo;
       }
+    }
 
-      // Only rewrite a value that still contains the old name and does NOT
-      // already contain the new one - see the doc comment above for why
-      // the second half of that check exists.
-      if (
-        typeof generatedMarketplace.name === 'string' &&
-        generatedMarketplace.name.includes(oldName) && !generatedMarketplace.name.includes(renameTo)
-      ) {
-        const before = generatedMarketplace.name;
-        generatedMarketplace.name = before.split(oldName).join(renameTo);
-        changed.push(`marketplace name: ${JSON.stringify(before)} -> ${JSON.stringify(generatedMarketplace.name)}`);
+    // Marketplace-level rewrite: always derived fresh from the untouched
+    // sourceMarketplace (loaded above), never from generatedMarketplace.name
+    // - see the doc comment above for why.
+    const sourceMarketplaceName = sourceMarketplace.name;
+    if (typeof sourceMarketplaceName === 'string') {
+      const expectedName = sourceMarketplaceName.includes(entryOldName)
+        ? sourceMarketplaceName.split(entryOldName).join(renameTo)
+        : sourceMarketplaceName; // doesn't embed the plugin's name - nothing to rename.
+
+      if (typeof generatedMarketplace.name === 'string' && generatedMarketplace.name !== expectedName) {
+        changed.push(`marketplace name: ${JSON.stringify(generatedMarketplace.name)} -> ${JSON.stringify(expectedName)}`);
+        generatedMarketplace.name = expectedName;
       }
     }
   }
