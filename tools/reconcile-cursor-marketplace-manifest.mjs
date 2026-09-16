@@ -28,13 +28,25 @@
  * same --rename-to value given to reconcile-plugin-manifest.mjs so
  * plugin.json and marketplace.json agree on the new name.
  *
- * It also rewrites any occurrence of the entry's *old* name inside the
+ * It also rewrites any occurrence of the entry's pre-rename name inside the
  * marketplace's own top-level `name` (acplugin passes this through
  * unchanged from the source, so it otherwise keeps saying e.g.
  * "suqo-claude-plugins-marketplace" even after the listed plugin has
  * been correctly renamed - exactly the confusing-branding bug this whole
- * rename exists to fix). Found by review, not hypothetical: this is the
- * one part of the marketplace file --rename-to originally missed.
+ * rename exists to fix).
+ *
+ * [plugin-name] doubles as the reliable "pre-rename name" anchor for that
+ * rewrite (not `generatedEntry.name`, which becomes the *new* name after
+ * the first run) - a real bug, found by review and reproduced: reading the
+ * anchor from the file this script writes to meant a second run against an
+ * already-renamed marketplace.json couldn't find the entry at all (the
+ * generated-side lookup matched on the old name only) and exited with an
+ * error. `[plugin-name]` is a CLI argument, not something this script's
+ * own output ever changes, so it stays a valid anchor no matter how many
+ * times this has already run - and the generated-side lookup below also
+ * falls back to matching on `--rename-to` itself, so a second run finds
+ * the (already-renamed) entry and correctly reports no further changes
+ * needed, rather than failing. See the idempotency test.
  *
  * Writes the reconciled marketplace.json back in place, with a trailing
  * newline.
@@ -43,24 +55,42 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const ENTRY_FIELDS_TO_RECONCILE = ['category'];
+const KNOWN_FLAGS = new Set(['--rename-to']);
 
-function findEntry(marketplace, targetName) {
-  return targetName
-    ? marketplace.plugins?.find((p) => p.name === targetName)
-    : marketplace.plugins?.[0];
+function findEntry(marketplace, targetName, renameTo) {
+  if (!targetName) return marketplace.plugins?.[0];
+  return marketplace.plugins?.find((p) => p.name === targetName)
+    ?? (renameTo ? marketplace.plugins?.find((p) => p.name === renameTo) : undefined);
 }
 
+// Strict on purpose - see reconcile-plugin-manifest.mjs's identical
+// rationale: a silently-ignored malformed flag defeats the whole point of
+// this living in the pipeline instead of being a hand-edit.
 function parseArgs(argv) {
   const positional = [];
-  let renameTo;
+  const flags = {};
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--rename-to') {
-      renameTo = argv[++i];
+    const arg = argv[i];
+    if (arg.startsWith('--')) {
+      if (arg.includes('=')) {
+        console.error(`Unsupported "--flag=value" syntax: "${arg}". Use "--flag value" (space-separated).`);
+        process.exit(1);
+      }
+      if (!KNOWN_FLAGS.has(arg)) {
+        console.error(`Unrecognized flag: "${arg}".`);
+        process.exit(1);
+      }
+      const value = argv[++i];
+      if (value === undefined || value.startsWith('--')) {
+        console.error(`Flag "${arg}" requires a value.`);
+        process.exit(1);
+      }
+      flags[arg] = value;
     } else {
-      positional.push(argv[i]);
+      positional.push(arg);
     }
   }
-  return { positional, renameTo };
+  return { positional, renameTo: flags['--rename-to'] };
 }
 
 function main() {
@@ -74,8 +104,11 @@ function main() {
   const sourceMarketplace = JSON.parse(readFileSync(sourceMarketplacePath, 'utf8'));
   const generatedMarketplace = JSON.parse(readFileSync(generatedMarketplacePath, 'utf8'));
 
+  // Source never changes across runs, so a plain lookup is fine here.
   const sourceEntry = findEntry(sourceMarketplace, targetName);
-  const generatedEntry = findEntry(generatedMarketplace, targetName);
+  // The generated file is what this script writes to, so its lookup needs
+  // the already-renamed fallback to stay idempotent.
+  const generatedEntry = findEntry(generatedMarketplace, targetName, renameTo);
 
   if (!sourceEntry) {
     console.error(`No matching entry found in source marketplace${targetName ? ` for "${targetName}"` : ''}.`);
@@ -96,19 +129,26 @@ function main() {
   }
 
   if (renameTo !== undefined) {
-    const oldName = generatedEntry.name;
+    // Prefer the CLI-supplied pre-rename name (stable across runs) over
+    // generatedEntry.name (which becomes the *new* name after the first run).
+    const oldName = targetName ?? generatedEntry.name;
     if (oldName !== renameTo) {
-      changed.push(`name: ${JSON.stringify(oldName)} -> ${JSON.stringify(renameTo)}`);
-      generatedEntry.name = renameTo;
-      if (typeof generatedEntry.source === 'string') {
+      if (generatedEntry.name !== renameTo) {
+        changed.push(`name: ${JSON.stringify(generatedEntry.name)} -> ${JSON.stringify(renameTo)}`);
+        generatedEntry.name = renameTo;
+      }
+      if (typeof generatedEntry.source === 'string' && generatedEntry.source !== renameTo) {
         changed.push(`source: ${JSON.stringify(generatedEntry.source)} -> ${JSON.stringify(renameTo)}`);
         generatedEntry.source = renameTo;
       }
 
       if (typeof generatedMarketplace.name === 'string' && generatedMarketplace.name.includes(oldName)) {
         const before = generatedMarketplace.name;
-        generatedMarketplace.name = before.split(oldName).join(renameTo);
-        changed.push(`marketplace name: ${JSON.stringify(before)} -> ${JSON.stringify(generatedMarketplace.name)}`);
+        const after = before.split(oldName).join(renameTo);
+        if (after !== before) {
+          generatedMarketplace.name = after;
+          changed.push(`marketplace name: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+        }
       }
     }
   }

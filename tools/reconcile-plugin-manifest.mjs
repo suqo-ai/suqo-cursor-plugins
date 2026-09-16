@@ -31,14 +31,20 @@
  * output, so it survives every future regeneration instead of getting
  * silently reverted by the next one.
  *
- * --rename-to also rewrites `homepage`/`repository` (or `repository.url`)
- * when they embed the old name as a GitHub repo-URL path segment (e.g.
- * https://github.com/suqo-ai/suqo-claude-plugins -> .../suqo-codex-plugins).
- * FIELDS_TO_RECONCILE above copies these straight from the source with no
- * awareness of the rename, so without this a renamed plugin would still
- * ship a homepage link pointing at the source repo instead of its own -
- * a real bug found by review, not hypothetical (confirmed present in the
- * first version of this rename before this fix).
+ * When --rename-to is given, `homepage`/`repository` (or `repository.url`)
+ * get the source's own name rewritten to the new name wherever it appears
+ * embedded in the URL (e.g. https://github.com/suqo-ai/suqo-claude-plugins
+ * -> .../suqo-codex-plugins), applied as part of pulling the value from
+ * source - not as a separate pass afterward. An earlier version applied
+ * the rewrite as a second pass keyed off the *generated* manifest's own
+ * (post-rewrite) name, which drifted to the new name after the first run;
+ * on a second run the rewrite pass silently no-op'd while the plain
+ * source-copy above it kept unconditionally overwriting with the raw,
+ * unrenamed value - so the script converged on the wrong value and then
+ * reported itself clean (found by review, reproduced, fixed). Deriving
+ * the renamed value once, from `source.name` (which never changes between
+ * runs) and using *that* as the value being reconciled, makes this a true
+ * no-op on any run after the first - see the idempotency test.
  *
  * Writes the reconciled manifest back to <generated-plugin.json> in place.
  */
@@ -46,6 +52,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const FIELDS_TO_RECONCILE = ['version', 'author', 'homepage', 'repository', 'license', 'keywords'];
+const URL_BEARING_FIELDS = new Set(['homepage', 'repository']);
+const KNOWN_FLAGS = new Set(['--rename-to']);
 
 // Preferred key order for readability, matching Codex's own plugin.json sample
 // (openai/codex: codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md).
@@ -65,17 +73,47 @@ function reorder(manifest) {
   return ordered;
 }
 
+// Rewrites `oldName` to `newName` wherever it appears embedded in a URL
+// string, or in a {url} object's .url, leaving anything else untouched.
+function renameInUrlBearingValue(value, oldName, newName) {
+  if (typeof value === 'string') return value.split(oldName).join(newName);
+  if (value && typeof value === 'object' && typeof value.url === 'string') {
+    return { ...value, url: value.url.split(oldName).join(newName) };
+  }
+  return value;
+}
+
+// Strict on purpose: a silently-ignored malformed flag is the same failure
+// mode this whole script exists to close (a fix that looks applied but
+// isn't) - found by review on an earlier version that accepted `--rename-to`
+// only in exact "--flag value" form, so `--rename-to=x`, a missing value, or
+// a typo'd flag name all fell through to being ignored positional
+// arguments with exit code 0.
 function parseArgs(argv) {
   const positional = [];
-  let renameTo;
+  const flags = {};
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--rename-to') {
-      renameTo = argv[++i];
+    const arg = argv[i];
+    if (arg.startsWith('--')) {
+      if (arg.includes('=')) {
+        console.error(`Unsupported "--flag=value" syntax: "${arg}". Use "--flag value" (space-separated).`);
+        process.exit(1);
+      }
+      if (!KNOWN_FLAGS.has(arg)) {
+        console.error(`Unrecognized flag: "${arg}".`);
+        process.exit(1);
+      }
+      const value = argv[++i];
+      if (value === undefined || value.startsWith('--')) {
+        console.error(`Flag "${arg}" requires a value.`);
+        process.exit(1);
+      }
+      flags[arg] = value;
     } else {
-      positional.push(argv[i]);
+      positional.push(arg);
     }
   }
-  return { positional, renameTo };
+  return { positional, renameTo: flags['--rename-to'] };
 }
 
 function main() {
@@ -92,42 +130,28 @@ function main() {
   const reconciled = { ...generated };
   const changed = [];
 
+  // renameTo is only ever applied against source.name, the source's own
+  // declared identity - constant across every run, unlike anything read
+  // from the file this script writes to.
+  const oldName = renameTo !== undefined ? source.name : undefined;
+
   for (const field of FIELDS_TO_RECONCILE) {
     if (source[field] === undefined) continue;
+    let sourceValue = source[field];
+    if (renameTo !== undefined && oldName !== renameTo && URL_BEARING_FIELDS.has(field)) {
+      sourceValue = renameInUrlBearingValue(sourceValue, oldName, renameTo);
+    }
     const before = JSON.stringify(reconciled[field]);
-    const after = JSON.stringify(source[field]);
+    const after = JSON.stringify(sourceValue);
     if (before !== after) {
-      reconciled[field] = source[field];
+      reconciled[field] = sourceValue;
       changed.push(`${field}: ${before ?? '(absent)'} -> ${after}`);
     }
   }
 
-  if (renameTo !== undefined) {
-    const oldName = reconciled.name;
-    if (oldName !== renameTo) {
-      changed.push(`name: ${JSON.stringify(oldName)} -> ${JSON.stringify(renameTo)}`);
-      reconciled.name = renameTo;
-
-      const rename = (str) => str.split(oldName).join(renameTo);
-
-      if (typeof reconciled.homepage === 'string' && reconciled.homepage.includes(oldName)) {
-        const before = reconciled.homepage;
-        reconciled.homepage = rename(before);
-        changed.push(`homepage: ${JSON.stringify(before)} -> ${JSON.stringify(reconciled.homepage)}`);
-      }
-      if (typeof reconciled.repository === 'string' && reconciled.repository.includes(oldName)) {
-        const before = reconciled.repository;
-        reconciled.repository = rename(before);
-        changed.push(`repository: ${JSON.stringify(before)} -> ${JSON.stringify(reconciled.repository)}`);
-      } else if (
-        reconciled.repository && typeof reconciled.repository === 'object' &&
-        typeof reconciled.repository.url === 'string' && reconciled.repository.url.includes(oldName)
-      ) {
-        const before = reconciled.repository.url;
-        reconciled.repository.url = rename(before);
-        changed.push(`repository.url: ${JSON.stringify(before)} -> ${JSON.stringify(reconciled.repository.url)}`);
-      }
-    }
+  if (renameTo !== undefined && reconciled.name !== renameTo) {
+    changed.push(`name: ${JSON.stringify(reconciled.name)} -> ${JSON.stringify(renameTo)}`);
+    reconciled.name = renameTo;
   }
 
   const finalManifest = reorder(reconciled);
