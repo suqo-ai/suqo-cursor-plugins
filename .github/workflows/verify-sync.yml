@@ -1,11 +1,21 @@
 name: Verify Cursor sync
 
-# Two independent checks on every PR to main:
+# Three independent checks on every PR to main:
 #  1. test-reconcile-scripts: do tools/reconcile-*.mjs still behave correctly?
 #  2. verify-in-sync-with-source: does what's committed at the repo root
 #     (.cursor-plugin/, skills/) actually match what acplugin + both
 #     reconcile scripts produce from suqo-claude-plugins at the commit
 #     recorded in .source-sync?
+#  3. install-verification: does the committed plugin actually load in a
+#     real Cursor Agent CLI session? Added after discovering the sync
+#     routine's own cloud sandbox can't reliably reach cursor.com at all
+#     (403 with the default network policy, then connection resets/SSL
+#     errors even after allowlisting cursor.com + *.cursor.sh) - a GitHub
+#     Actions runner has normal unrestricted internet, no proxy or TLS
+#     interception, so this is a real fix rather than a workaround for
+#     that sandbox's network policy. Mirrors suqo-antigravity-plugins'
+#     already-working install-verification job - this repo never had one
+#     before, unlike that repo's from the start.
 #
 # Pinned to .source-sync's recorded SHA, not suqo-claude-plugins' live
 # main, on purpose: diffing against a moving target means any PR here -
@@ -117,3 +127,50 @@ jobs:
             exit 1
           fi
           echo "In sync with suqo-ai/suqo-claude-plugins@${{ steps.pinned.outputs.sha }}."
+
+  install-verification:
+    runs-on: ubuntu-latest
+    needs: test-reconcile-scripts
+    steps:
+      - uses: actions/checkout@v4
+
+      # The installer (confirmed by reading its actual script content, not
+      # assumed) puts symlinks named `agent` and `cursor-agent` under
+      # ~/.local/bin and does NOT modify PATH itself - it only prints
+      # instructions for a human to do that in their shell rc. CI has no
+      # such rc to source, so this step adds it to $GITHUB_PATH explicitly,
+      # or every later step in this job would fail to find the binary.
+      - name: Install the Cursor Agent CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # CURSOR_API_KEY here is a GitHub Actions repo secret - a separate
+      # credential store from the one this project's sync routine's cloud
+      # environment uses for its own (unrelated, still-blocked-by-network)
+      # attempt at this same check. Two different places, same key value.
+      #
+      # `agent --plugin-dir` (interactive, no -p) is the confirmed-working
+      # check this repo's README has documented from real testing done
+      # earlier in this project. Combining it with `-p`/`--force` for
+      # headless CI use is new with this job and NOT yet independently
+      # confirmed the way the rest of this repo's CI is - watch this job's
+      # first few real runs before trusting it the way verify-in-sync-
+      # with-source is already trusted.
+      - name: Verify the plugin actually loads in a real headless session
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          agent -p --force --output-format text --plugin-dir "$GITHUB_WORKSPACE" \
+            "List the exact directory name of every skill available to you in this session, one per line, nothing else - no other text." \
+            | tee /tmp/agent-skills-output.txt
+
+          echo "--- confirming every skill in this repo's skills/ directory was actually listed ---"
+          for skill_dir in skills/*/; do
+            skill_name=$(basename "$skill_dir")
+            if ! grep -q "$skill_name" /tmp/agent-skills-output.txt; then
+              echo "::error::agent --plugin-dir did not report skill '$skill_name' as available - the plugin may have failed to load correctly."
+              exit 1
+            fi
+          done
+          echo "All skills in skills/ confirmed loaded by a real agent session."
