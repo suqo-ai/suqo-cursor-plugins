@@ -1,11 +1,26 @@
 name: Verify Cursor sync
 
-# Two independent checks on every PR to main:
+# Three independent checks on every PR to main:
 #  1. test-reconcile-scripts: do tools/reconcile-*.mjs still behave correctly?
 #  2. verify-in-sync-with-source: does what's committed at the repo root
 #     (.cursor-plugin/, skills/) actually match what acplugin + both
 #     reconcile scripts produce from suqo-claude-plugins at the commit
 #     recorded in .source-sync?
+#  3. install-verification: does the committed plugin actually load in a
+#     real Cursor Agent CLI session? Added after discovering the sync
+#     routine's own cloud sandbox can't reliably reach cursor.com at all
+#     (403 with the default network policy, then connection resets/SSL
+#     errors even after allowlisting cursor.com + *.cursor.sh) - a GitHub
+#     Actions runner has normal unrestricted internet, no proxy or TLS
+#     interception, so this is a real fix rather than a workaround for
+#     that sandbox's network policy. This job is NOT the same shape as
+#     suqo-antigravity-plugins' install-verification, despite the same
+#     motivation - that job runs deterministic `agy plugin validate/
+#     install` subcommands with no secret and no LLM prompt/response
+#     involved. This job authenticates a real agent session with a
+#     secret and lets it answer a prompt with tool-use enabled - a
+#     genuinely different, higher-risk shape; see the security note
+#     below before assuming this is as safe as that one.
 #
 # Pinned to .source-sync's recorded SHA, not suqo-claude-plugins' live
 # main, on purpose: diffing against a moving target means any PR here -
@@ -117,3 +132,158 @@ jobs:
             exit 1
           fi
           echo "In sync with suqo-ai/suqo-claude-plugins@${{ steps.pinned.outputs.sha }}."
+
+  install-verification:
+    runs-on: ubuntu-latest
+    needs: test-reconcile-scripts
+    # Real runs take well under 2 minutes. --trust (not --force/--yolo)
+    # means a tool call the model attempts mid-response could sit waiting
+    # on an approval that never comes in this non-interactive shell - cap
+    # it well short of GitHub's 360-minute default so that hangs fail
+    # fast and visibly instead of burning CI time silently.
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hardcoded to exactly today's two skills below (the token-injection
+      # and prompt steps) - if this ever fires, it's telling you this job
+      # itself needs updating for the added/removed/renamed skill, not
+      # that the sync is broken. Checks identity, not just count: a count-
+      # only check would pass silently if one skill were renamed/swapped
+      # for a different one while another was added, keeping the total at
+      # 2 - this catches that too, not just a plain third addition.
+      - name: Confirm skills/ still has exactly the two skills this job expects
+        run: |
+          set -o pipefail
+          if [ ! -d skills/php-sdk-usage ] || [ ! -d skills/ts-sdk-usage ]; then
+            echo "::error::Expected both skills/php-sdk-usage and skills/ts-sdk-usage to exist. Update this job's token-injection step and prompt to match whatever skills/ actually has now."
+            exit 1
+          fi
+          actual=$(find skills -maxdepth 1 -mindepth 1 -type d | wc -l)
+          if [ "$actual" -ne 2 ]; then
+            echo "::error::skills/ has $actual directories total - php-sdk-usage and ts-sdk-usage both still exist, but something else was added. Update this job to also cover it."
+            exit 1
+          fi
+
+      # GitHub withholds repo secrets (including CURSOR_API_KEY) from
+      # pull_request runs triggered by a fork - by design, not a bug here.
+      # Without a fork check, this job would fail confusingly on any
+      # outside contributor's PR for a reason unrelated to their change.
+      # Skip (not fail) when the key is absent, and say why, so a
+      # maintainer knows to run this check by hand before merging one.
+      - name: Check whether CURSOR_API_KEY is available this run
+        id: auth
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "::warning::CURSOR_API_KEY is not available (expected on a fork PR - GitHub withholds repo secrets from those runs). Skipping install-verification; a maintainer must run this check manually before merging a fork PR."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The installer (confirmed by reading its actual script content, not
+      # assumed) puts symlinks named `agent` and `cursor-agent` under
+      # ~/.local/bin and does NOT modify PATH itself - it only prints
+      # instructions for a human to do that in their shell rc. CI has no
+      # such rc to source, so this step adds it to $GITHUB_PATH explicitly,
+      # or every later step in this job would fail to find the binary.
+      #
+      # No version pin: confirmed (via Cursor's own docs) there's no
+      # documented env var, argument, or versioned URL to pin this
+      # installer to a specific release - the same tradeoff already
+      # accepted for suqo-antigravity-plugins' `agy` CLI for the same
+      # reason. Accepted, not fixed: a future Cursor CLI release changing
+      # --force/--output-format/response behavior could make this job
+      # fail (or pass) for reasons unrelated to any real PR content.
+      - name: Install the Cursor Agent CLI
+        if: steps.auth.outputs.available == 'true'
+        run: |
+          set -o pipefail
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # CURSOR_API_KEY here is a GitHub Actions repo secret - a separate
+      # credential store from the one this project's sync routine's cloud
+      # environment uses for its own (unrelated, still-blocked-by-network)
+      # attempt at this same check. Two different places, same key value.
+      #
+      # `agent --plugin-dir` (interactive, no -p) is the confirmed-working
+      # check this repo's README has documented from real testing done
+      # earlier in this project. Combining it with `-p` for headless CI use
+      # is new with this job and went through several redesigns before
+      # landing here, each one closing a real gap the last one had:
+      #   1. "list every skill" - ambiguous with Cursor's own built-in
+      #      slash-command terminology (answered with autopilot/create-
+      #      hook/sdk/... instead of this plugin's skills), so a real
+      #      answer proved nothing about whether --plugin-dir loaded
+      #      anything.
+      #   2. SDK namespace/package names - genuinely public
+      #      (skills/ts-sdk-usage/SKILL.md itself links the live npmjs.com
+      #      page), so a model could answer correctly from training data
+      #      alone with nothing loaded.
+      #   3. An internal-looking implementation detail (a constant name,
+      #      a field name) from references/webhooks.md - still fails the
+      #      same way, because this repo is a public GitHub repo: the
+      #      exact strings sit in plaintext, indexable by GitHub code
+      #      search and any training-data crawl that covers it. "Internal
+      #      detail" and "not publicly hosted" are not the same thing.
+      # No fact that already exists in this repo before the run starts
+      # can ever be fully guess-proof against that. The fix is to stop
+      # testing static facts altogether: the step below generates a fresh
+      # random token per run and writes it into each skill's directory
+      # after checkout, then asks the model to report it back. A token
+      # that doesn't exist until this run started can't be in any
+      # training data or search index, regardless of this repo's
+      # visibility - it can only be known by actually reading this run's
+      # live checkout, which is exactly what this job needs to prove.
+      - name: Inject a fresh random per-run token into each skill (this run's checkout only, never committed)
+        if: steps.auth.outputs.available == 'true'
+        id: tokens
+        run: |
+          set -o pipefail
+          php_token="ci-check-$(openssl rand -hex 8)"
+          ts_token="ci-check-$(openssl rand -hex 8)"
+          echo "$php_token" > skills/php-sdk-usage/references/_ci-verification-token.md
+          echo "$ts_token" > skills/ts-sdk-usage/references/_ci-verification-token.md
+          echo "php_token=$php_token" >> "$GITHUB_OUTPUT"
+          echo "ts_token=$ts_token" >> "$GITHUB_OUTPUT"
+
+      # Deliberately using --trust, not --force/--yolo: confirmed directly
+      # (a real CI run failed with exactly this message) that -p refuses
+      # to do anything at all without one of --trust/--yolo/-f - "Workspace
+      # Trust Required... Cursor Agent can execute code and access files
+      # in this directory. Do you trust the contents of this directory?" -
+      # a separate gate from tool-call approval. --force/--yolo would also
+      # clear this gate but additionally auto-approves every tool call the
+      # model makes afterward (including web-fetch) with no human review -
+      # a real risk here specifically because --plugin-dir loads
+      # skills/*/ content into the model's own context, so a malicious
+      # edit to that content could otherwise get its embedded instructions
+      # auto-executed with CURSOR_API_KEY sitting in env. --trust clears
+      # only the workspace-trust gate; this prompt asks a plain question
+      # needing no file/tool modification to answer, so it doesn't need
+      # the broader auto-approval --force/--yolo grants.
+      #
+      # Only checks the two skills this repo has today (php-sdk-usage,
+      # ts-sdk-usage) - the token-injection step above and the two grep
+      # checks below are both hardcoded to exactly these two. If a third
+      # skill is ever added, both need a matching update, or that skill's
+      # load status won't be covered by this job at all - the step above
+      # this one already fails loudly first if that happens, precisely so
+      # this doesn't silently under-cover a skill it was never told about.
+      - name: Verify the plugin actually loads in a real headless session
+        if: steps.auth.outputs.available == 'true'
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set -o pipefail
+          agent -p --trust --output-format text --plugin-dir "$GITHUB_WORKSPACE" \
+            "There is a file named _ci-verification-token.md in the references/ directory of both the php-sdk-usage skill and the ts-sdk-usage skill. Report the exact contents of each of those two files, nothing else." \
+            | tee /tmp/agent-output.txt
+
+          echo "--- confirming the response includes this run's own freshly-generated tokens, not a guess ---"
+          grep -qF "${{ steps.tokens.outputs.php_token }}" /tmp/agent-output.txt || { echo "::error::Response didn't include this run's injected php-sdk-usage token - php-sdk-usage likely didn't load."; exit 1; }
+          grep -qF "${{ steps.tokens.outputs.ts_token }}" /tmp/agent-output.txt || { echo "::error::Response didn't include this run's injected ts-sdk-usage token - ts-sdk-usage likely didn't load."; exit 1; }
+          echo "Both skills confirmed loaded: response included this run's own freshly-generated tokens, which cannot exist in any training data or search index."
