@@ -197,15 +197,21 @@ jobs:
       # public/general knowledge) instead - a correct answer is a much
       # harder, unambiguous signal.
       #
-      # Deliberately NOT passing --force/--yolo: this prompt only asks a
-      # question, no file/tool modification is needed to answer it, and
-      # --force auto-approves tool calls (including web-fetch) with no
-      # human review - a real risk here specifically because --plugin-dir
-      # loads skills/*/SKILL.md content into the model's own context, so
-      # a malicious edit to that content could otherwise get its embedded
+      # Deliberately using --trust, not --force/--yolo: confirmed directly
+      # (a real CI run failed with exactly this message) that -p refuses
+      # to do anything at all without one of --trust/--yolo/-f - "Workspace
+      # Trust Required... Cursor Agent can execute code and access files
+      # in this directory. Do you trust the contents of this directory?" -
+      # a separate gate from tool-call approval. --force/--yolo would also
+      # clear this gate but additionally auto-approves every tool call the
+      # model makes afterward (including web-fetch) with no human review -
+      # a real risk here specifically because --plugin-dir loads
+      # skills/*/SKILL.md content into the model's own context, so a
+      # malicious edit to that content could otherwise get its embedded
       # instructions auto-executed with CURSOR_API_KEY sitting in env.
-      # Confirmed the check still passes read-only, without --force, in a
-      # real CI run before removing it here.
+      # --trust clears only the workspace-trust gate; this prompt asks a
+      # plain question needing no file/tool modification to answer, so it
+      # doesn't need the broader auto-approval --force/--yolo grants.
       #
       # Only checks the two skills this repo has today (php-sdk-usage,
       # ts-sdk-usage), not a loop over every skills/*/ directory like
@@ -222,7 +228,7 @@ jobs:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -o pipefail
-          agent -p --output-format text --plugin-dir "$GITHUB_WORKSPACE" \
+          agent -p --trust --output-format text --plugin-dir "$GITHUB_WORKSPACE" \
             "What exact PHP namespace and Composer package name does the SUQO PHP SDK use, and what exact npm package name does the SUQO TypeScript SDK use? Answer with just the three values, nothing else." \
             | tee /tmp/agent-output.txt
 
