@@ -145,15 +145,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Hardcoded to exactly today's two skills below (grep checks and
-      # the count here) - if this ever fires, it's telling you this job
-      # itself needs updating for the added/removed skill, not that the
-      # sync is broken.
-      - name: Confirm skills/ still has exactly the two skills this job checks
+      # Hardcoded to exactly today's two skills below (the token-injection
+      # and prompt steps) - if this ever fires, it's telling you this job
+      # itself needs updating for the added/removed/renamed skill, not
+      # that the sync is broken. Checks identity, not just count: a count-
+      # only check would pass silently if one skill were renamed/swapped
+      # for a different one while another was added, keeping the total at
+      # 2 - this catches that too, not just a plain third addition.
+      - name: Confirm skills/ still has exactly the two skills this job expects
         run: |
+          set -o pipefail
+          if [ ! -d skills/php-sdk-usage ] || [ ! -d skills/ts-sdk-usage ]; then
+            echo "::error::Expected both skills/php-sdk-usage and skills/ts-sdk-usage to exist. Update this job's token-injection step and prompt to match whatever skills/ actually has now."
+            exit 1
+          fi
           actual=$(find skills -maxdepth 1 -mindepth 1 -type d | wc -l)
           if [ "$actual" -ne 2 ]; then
-            echo "::error::skills/ now has $actual directories, not the 2 this job's prompt and grep checks are hardcoded to verify. Update this job (the prompt below, and its three grep checks) to cover the added/removed skill before merging."
+            echo "::error::skills/ has $actual directories total - php-sdk-usage and ts-sdk-usage both still exist, but something else was added. Update this job to also cover it."
             exit 1
           fi
 
@@ -204,23 +212,44 @@ jobs:
       # `agent --plugin-dir` (interactive, no -p) is the confirmed-working
       # check this repo's README has documented from real testing done
       # earlier in this project. Combining it with `-p` for headless CI use
-      # is new with this job - confirmed working across three real CI
-      # runs before this job was trusted: the first proved the CLI
-      # installs and authenticates fine, but used a prompt ("list every
-      # skill") ambiguous with Cursor's own built-in slash-command
-      # terminology (it answered with autopilot/create-hook/sdk/... instead
-      # of this plugin's skills), proving nothing either way about whether
-      # --plugin-dir had actually loaded anything. A second version asked
-      # for the SDKs' namespace/package names instead, but those are
-      # genuinely public (skills/ts-sdk-usage/SKILL.md itself links the
-      # live npmjs.com page) - a model could answer correctly from its own
-      # training data even if --plugin-dir loaded nothing at all, which
-      # defeats the entire point of this check. The prompt below instead
-      # asks for an internal implementation detail with no public source
-      # (an exact default timeout value and the PHP constant name holding
-      # it, from references/webhooks.md) - correctly answering it is only
-      # possible by actually having read that specific file's content.
-      #
+      # is new with this job and went through several redesigns before
+      # landing here, each one closing a real gap the last one had:
+      #   1. "list every skill" - ambiguous with Cursor's own built-in
+      #      slash-command terminology (answered with autopilot/create-
+      #      hook/sdk/... instead of this plugin's skills), so a real
+      #      answer proved nothing about whether --plugin-dir loaded
+      #      anything.
+      #   2. SDK namespace/package names - genuinely public
+      #      (skills/ts-sdk-usage/SKILL.md itself links the live npmjs.com
+      #      page), so a model could answer correctly from training data
+      #      alone with nothing loaded.
+      #   3. An internal-looking implementation detail (a constant name,
+      #      a field name) from references/webhooks.md - still fails the
+      #      same way, because this repo is a public GitHub repo: the
+      #      exact strings sit in plaintext, indexable by GitHub code
+      #      search and any training-data crawl that covers it. "Internal
+      #      detail" and "not publicly hosted" are not the same thing.
+      # No fact that already exists in this repo before the run starts
+      # can ever be fully guess-proof against that. The fix is to stop
+      # testing static facts altogether: the step below generates a fresh
+      # random token per run and writes it into each skill's directory
+      # after checkout, then asks the model to report it back. A token
+      # that doesn't exist until this run started can't be in any
+      # training data or search index, regardless of this repo's
+      # visibility - it can only be known by actually reading this run's
+      # live checkout, which is exactly what this job needs to prove.
+      - name: Inject a fresh random per-run token into each skill (this run's checkout only, never committed)
+        if: steps.auth.outputs.available == 'true'
+        id: tokens
+        run: |
+          set -o pipefail
+          php_token="ci-check-$(openssl rand -hex 8)"
+          ts_token="ci-check-$(openssl rand -hex 8)"
+          echo "$php_token" > skills/php-sdk-usage/references/_ci-verification-token.md
+          echo "$ts_token" > skills/ts-sdk-usage/references/_ci-verification-token.md
+          echo "php_token=$php_token" >> "$GITHUB_OUTPUT"
+          echo "ts_token=$ts_token" >> "$GITHUB_OUTPUT"
+
       # Deliberately using --trust, not --force/--yolo: confirmed directly
       # (a real CI run failed with exactly this message) that -p refuses
       # to do anything at all without one of --trust/--yolo/-f - "Workspace
@@ -230,22 +259,20 @@ jobs:
       # clear this gate but additionally auto-approves every tool call the
       # model makes afterward (including web-fetch) with no human review -
       # a real risk here specifically because --plugin-dir loads
-      # skills/*/SKILL.md content into the model's own context, so a
-      # malicious edit to that content could otherwise get its embedded
-      # instructions auto-executed with CURSOR_API_KEY sitting in env.
-      # --trust clears only the workspace-trust gate; this prompt asks a
-      # plain question needing no file/tool modification to answer, so it
-      # doesn't need the broader auto-approval --force/--yolo grants.
+      # skills/*/ content into the model's own context, so a malicious
+      # edit to that content could otherwise get its embedded instructions
+      # auto-executed with CURSOR_API_KEY sitting in env. --trust clears
+      # only the workspace-trust gate; this prompt asks a plain question
+      # needing no file/tool modification to answer, so it doesn't need
+      # the broader auto-approval --force/--yolo grants.
       #
       # Only checks the two skills this repo has today (php-sdk-usage,
-      # ts-sdk-usage), not a loop over every skills/*/ directory like
-      # verify-in-sync-with-source's diff is - a generic "does the skill's
-      # directory name appear anywhere in the response" check is exactly
-      # the ambiguous signal the first real run already proved unreliable
-      # (Cursor's own built-in command names satisfy that too). If a third
-      # skill is ever added, this prompt and its three grep checks below
-      # need a matching update, or that skill's load status won't be
-      # covered by this job at all.
+      # ts-sdk-usage) - the token-injection step above and the two grep
+      # checks below are both hardcoded to exactly these two. If a third
+      # skill is ever added, both need a matching update, or that skill's
+      # load status won't be covered by this job at all - the step above
+      # this one already fails loudly first if that happens, precisely so
+      # this doesn't silently under-cover a skill it was never told about.
       - name: Verify the plugin actually loads in a real headless session
         if: steps.auth.outputs.available == 'true'
         env:
@@ -253,10 +280,10 @@ jobs:
         run: |
           set -o pipefail
           agent -p --trust --output-format text --plugin-dir "$GITHUB_WORKSPACE" \
-            "In the php-sdk-usage skill's webhooks reference doc, what is the exact PHP constant name (including its namespace) that holds the default webhook signature max-age? In the ts-sdk-usage skill's webhooks reference doc, what is the exact field name on VerifyWebhookOptions that controls the same tolerance? Answer with just those two exact names, nothing else." \
+            "There is a file named _ci-verification-token.md in the references/ directory of both the php-sdk-usage skill and the ts-sdk-usage skill. Report the exact contents of each of those two files, nothing else." \
             | tee /tmp/agent-output.txt
 
-          echo "--- confirming the answer matches this repo's own skill content, not a guess ---"
-          grep -qF 'Suqo\Constants::WEBHOOK_MAX_AGE' /tmp/agent-output.txt || { echo "::error::Response didn't mention the exact Suqo\\Constants::WEBHOOK_MAX_AGE constant - php-sdk-usage likely didn't load."; exit 1; }
-          grep -q 'toleranceSec' /tmp/agent-output.txt || { echo "::error::Response didn't mention the exact toleranceSec field name - ts-sdk-usage likely didn't load."; exit 1; }
-          echo "Both skills confirmed loaded: response matched internal implementation details with no public source, not a guess."
+          echo "--- confirming the response includes this run's own freshly-generated tokens, not a guess ---"
+          grep -qF "${{ steps.tokens.outputs.php_token }}" /tmp/agent-output.txt || { echo "::error::Response didn't include this run's injected php-sdk-usage token - php-sdk-usage likely didn't load."; exit 1; }
+          grep -qF "${{ steps.tokens.outputs.ts_token }}" /tmp/agent-output.txt || { echo "::error::Response didn't include this run's injected ts-sdk-usage token - ts-sdk-usage likely didn't load."; exit 1; }
+          echo "Both skills confirmed loaded: response included this run's own freshly-generated tokens, which cannot exist in any training data or search index."
