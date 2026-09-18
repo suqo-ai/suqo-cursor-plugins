@@ -153,19 +153,17 @@ jobs:
       # `agent --plugin-dir` (interactive, no -p) is the confirmed-working
       # check this repo's README has documented from real testing done
       # earlier in this project. Combining it with `-p`/`--force` for
-      # headless CI use is new with this job and NOT yet independently
-      # confirmed the way the rest of this repo's CI is - watch this job's
-      # first few real runs before trusting it the way verify-in-sync-
-      # with-source is already trusted.
-      # First real run of this job asked the model to "list every skill" -
-      # it answered with Cursor's own built-in slash-commands (autopilot,
-      # create-hook, sdk, ...), not this plugin's skills, so that phrasing
-      # is ambiguous with Cursor's own terminology and proves nothing
-      # either way about whether --plugin-dir actually loaded anything.
-      # Asking a content fact that only exists in these skills' own text
-      # (never public/general knowledge) is a much harder, unambiguous
-      # signal: the SDK's exact namespace/package names, verbatim from
-      # each skill's own frontmatter description.
+      # headless CI use is new with this job - confirmed working across two
+      # real CI runs before this job was trusted: the first run proved the
+      # CLI installs and authenticates fine, but used a prompt ("list every
+      # skill") ambiguous with Cursor's own built-in slash-command
+      # terminology (it answered with autopilot/create-hook/sdk/... instead
+      # of this plugin's skills), proving nothing either way about whether
+      # --plugin-dir had actually loaded anything. The prompt below asks a
+      # content fact that only exists in these skills' own text (never
+      # public/general knowledge) instead - a correct answer is a much
+      # harder, unambiguous signal, and the second real run got exactly the
+      # right values back verbatim.
       - name: Verify the plugin actually loads in a real headless session
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
@@ -175,7 +173,7 @@ jobs:
             | tee /tmp/agent-output.txt
 
           echo "--- confirming the answer matches this repo's own skill content, not a guess ---"
-          grep -q 'Suqo' /tmp/agent-output.txt || { echo "::error::Response didn't mention the Suqo\\ PHP namespace - php-sdk-usage likely didn't load."; exit 1; }
+          grep -qF 'Suqo\' /tmp/agent-output.txt || { echo "::error::Response didn't mention the Suqo\\ PHP namespace - php-sdk-usage likely didn't load."; exit 1; }
           grep -q 'suqo/suqo-php' /tmp/agent-output.txt || { echo "::error::Response didn't mention the suqo/suqo-php package - php-sdk-usage likely didn't load."; exit 1; }
           grep -q '@suqo/sdk' /tmp/agent-output.txt || { echo "::error::Response didn't mention the @suqo/sdk package - ts-sdk-usage likely didn't load."; exit 1; }
           echo "Both skills confirmed loaded: response matched this repo's own SUQO SDK details verbatim."
