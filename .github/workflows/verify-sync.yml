@@ -136,8 +136,26 @@ jobs:
   install-verification:
     runs-on: ubuntu-latest
     needs: test-reconcile-scripts
+    # Real runs take well under 2 minutes. --trust (not --force/--yolo)
+    # means a tool call the model attempts mid-response could sit waiting
+    # on an approval that never comes in this non-interactive shell - cap
+    # it well short of GitHub's 360-minute default so that hangs fail
+    # fast and visibly instead of burning CI time silently.
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+
+      # Hardcoded to exactly today's two skills below (grep checks and
+      # the count here) - if this ever fires, it's telling you this job
+      # itself needs updating for the added/removed skill, not that the
+      # sync is broken.
+      - name: Confirm skills/ still has exactly the two skills this job checks
+        run: |
+          actual=$(find skills -maxdepth 1 -mindepth 1 -type d | wc -l)
+          if [ "$actual" -ne 2 ]; then
+            echo "::error::skills/ now has $actual directories, not the 2 this job's prompt and grep checks are hardcoded to verify. Update this job (the prompt below, and its three grep checks) to cover the added/removed skill before merging."
+            exit 1
+          fi
 
       # GitHub withholds repo secrets (including CURSOR_API_KEY) from
       # pull_request runs triggered by a fork - by design, not a bug here.
@@ -192,10 +210,16 @@ jobs:
       # skill") ambiguous with Cursor's own built-in slash-command
       # terminology (it answered with autopilot/create-hook/sdk/... instead
       # of this plugin's skills), proving nothing either way about whether
-      # --plugin-dir had actually loaded anything. The prompt below asks a
-      # content fact that only exists in these skills' own text (never
-      # public/general knowledge) instead - a correct answer is a much
-      # harder, unambiguous signal.
+      # --plugin-dir had actually loaded anything. A second version asked
+      # for the SDKs' namespace/package names instead, but those are
+      # genuinely public (skills/ts-sdk-usage/SKILL.md itself links the
+      # live npmjs.com page) - a model could answer correctly from its own
+      # training data even if --plugin-dir loaded nothing at all, which
+      # defeats the entire point of this check. The prompt below instead
+      # asks for an internal implementation detail with no public source
+      # (an exact default timeout value and the PHP constant name holding
+      # it, from references/webhooks.md) - correctly answering it is only
+      # possible by actually having read that specific file's content.
       #
       # Deliberately using --trust, not --force/--yolo: confirmed directly
       # (a real CI run failed with exactly this message) that -p refuses
@@ -229,11 +253,10 @@ jobs:
         run: |
           set -o pipefail
           agent -p --trust --output-format text --plugin-dir "$GITHUB_WORKSPACE" \
-            "What exact PHP namespace and Composer package name does the SUQO PHP SDK use, and what exact npm package name does the SUQO TypeScript SDK use? Answer with just the three values, nothing else." \
+            "In the php-sdk-usage skill's webhooks reference doc, what is the exact PHP constant name (including its namespace) that holds the default webhook signature max-age? In the ts-sdk-usage skill's webhooks reference doc, what is the exact field name on VerifyWebhookOptions that controls the same tolerance? Answer with just those two exact names, nothing else." \
             | tee /tmp/agent-output.txt
 
           echo "--- confirming the answer matches this repo's own skill content, not a guess ---"
-          grep -qF 'Suqo\' /tmp/agent-output.txt || { echo "::error::Response didn't mention the Suqo\\ PHP namespace - php-sdk-usage likely didn't load."; exit 1; }
-          grep -q 'suqo/suqo-php' /tmp/agent-output.txt || { echo "::error::Response didn't mention the suqo/suqo-php package - php-sdk-usage likely didn't load."; exit 1; }
-          grep -q '@suqo/sdk' /tmp/agent-output.txt || { echo "::error::Response didn't mention the @suqo/sdk package - ts-sdk-usage likely didn't load."; exit 1; }
-          echo "Both skills confirmed loaded: response matched this repo's own SUQO SDK details verbatim."
+          grep -qF 'Suqo\Constants::WEBHOOK_MAX_AGE' /tmp/agent-output.txt || { echo "::error::Response didn't mention the exact Suqo\\Constants::WEBHOOK_MAX_AGE constant - php-sdk-usage likely didn't load."; exit 1; }
+          grep -q 'toleranceSec' /tmp/agent-output.txt || { echo "::error::Response didn't mention the exact toleranceSec field name - ts-sdk-usage likely didn't load."; exit 1; }
+          echo "Both skills confirmed loaded: response matched internal implementation details with no public source, not a guess."
