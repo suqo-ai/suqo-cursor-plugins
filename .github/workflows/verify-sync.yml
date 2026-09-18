@@ -13,9 +13,14 @@ name: Verify Cursor sync
 #     errors even after allowlisting cursor.com + *.cursor.sh) - a GitHub
 #     Actions runner has normal unrestricted internet, no proxy or TLS
 #     interception, so this is a real fix rather than a workaround for
-#     that sandbox's network policy. Mirrors suqo-antigravity-plugins'
-#     already-working install-verification job - this repo never had one
-#     before, unlike that repo's from the start.
+#     that sandbox's network policy. This job is NOT the same shape as
+#     suqo-antigravity-plugins' install-verification, despite the same
+#     motivation - that job runs deterministic `agy plugin validate/
+#     install` subcommands with no secret and no LLM prompt/response
+#     involved. This job authenticates a real agent session with a
+#     secret and lets it answer a prompt with tool-use enabled - a
+#     genuinely different, higher-risk shape; see the security note
+#     below before assuming this is as safe as that one.
 #
 # Pinned to .source-sync's recorded SHA, not suqo-claude-plugins' live
 # main, on purpose: diffing against a moving target means any PR here -
@@ -134,14 +139,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GitHub withholds repo secrets (including CURSOR_API_KEY) from
+      # pull_request runs triggered by a fork - by design, not a bug here.
+      # Without a fork check, this job would fail confusingly on any
+      # outside contributor's PR for a reason unrelated to their change.
+      # Skip (not fail) when the key is absent, and say why, so a
+      # maintainer knows to run this check by hand before merging one.
+      - name: Check whether CURSOR_API_KEY is available this run
+        id: auth
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "::warning::CURSOR_API_KEY is not available (expected on a fork PR - GitHub withholds repo secrets from those runs). Skipping install-verification; a maintainer must run this check manually before merging a fork PR."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # The installer (confirmed by reading its actual script content, not
       # assumed) puts symlinks named `agent` and `cursor-agent` under
       # ~/.local/bin and does NOT modify PATH itself - it only prints
       # instructions for a human to do that in their shell rc. CI has no
       # such rc to source, so this step adds it to $GITHUB_PATH explicitly,
       # or every later step in this job would fail to find the binary.
+      #
+      # No version pin: confirmed (via Cursor's own docs) there's no
+      # documented env var, argument, or versioned URL to pin this
+      # installer to a specific release - the same tradeoff already
+      # accepted for suqo-antigravity-plugins' `agy` CLI for the same
+      # reason. Accepted, not fixed: a future Cursor CLI release changing
+      # --force/--output-format/response behavior could make this job
+      # fail (or pass) for reasons unrelated to any real PR content.
       - name: Install the Cursor Agent CLI
+        if: steps.auth.outputs.available == 'true'
         run: |
+          set -o pipefail
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
@@ -152,23 +185,44 @@ jobs:
       #
       # `agent --plugin-dir` (interactive, no -p) is the confirmed-working
       # check this repo's README has documented from real testing done
-      # earlier in this project. Combining it with `-p`/`--force` for
-      # headless CI use is new with this job - confirmed working across two
-      # real CI runs before this job was trusted: the first run proved the
-      # CLI installs and authenticates fine, but used a prompt ("list every
+      # earlier in this project. Combining it with `-p` for headless CI use
+      # is new with this job - confirmed working across three real CI
+      # runs before this job was trusted: the first proved the CLI
+      # installs and authenticates fine, but used a prompt ("list every
       # skill") ambiguous with Cursor's own built-in slash-command
       # terminology (it answered with autopilot/create-hook/sdk/... instead
       # of this plugin's skills), proving nothing either way about whether
       # --plugin-dir had actually loaded anything. The prompt below asks a
       # content fact that only exists in these skills' own text (never
       # public/general knowledge) instead - a correct answer is a much
-      # harder, unambiguous signal, and the second real run got exactly the
-      # right values back verbatim.
+      # harder, unambiguous signal.
+      #
+      # Deliberately NOT passing --force/--yolo: this prompt only asks a
+      # question, no file/tool modification is needed to answer it, and
+      # --force auto-approves tool calls (including web-fetch) with no
+      # human review - a real risk here specifically because --plugin-dir
+      # loads skills/*/SKILL.md content into the model's own context, so
+      # a malicious edit to that content could otherwise get its embedded
+      # instructions auto-executed with CURSOR_API_KEY sitting in env.
+      # Confirmed the check still passes read-only, without --force, in a
+      # real CI run before removing it here.
+      #
+      # Only checks the two skills this repo has today (php-sdk-usage,
+      # ts-sdk-usage), not a loop over every skills/*/ directory like
+      # verify-in-sync-with-source's diff is - a generic "does the skill's
+      # directory name appear anywhere in the response" check is exactly
+      # the ambiguous signal the first real run already proved unreliable
+      # (Cursor's own built-in command names satisfy that too). If a third
+      # skill is ever added, this prompt and its three grep checks below
+      # need a matching update, or that skill's load status won't be
+      # covered by this job at all.
       - name: Verify the plugin actually loads in a real headless session
+        if: steps.auth.outputs.available == 'true'
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
-          agent -p --force --output-format text --plugin-dir "$GITHUB_WORKSPACE" \
+          set -o pipefail
+          agent -p --output-format text --plugin-dir "$GITHUB_WORKSPACE" \
             "What exact PHP namespace and Composer package name does the SUQO PHP SDK use, and what exact npm package name does the SUQO TypeScript SDK use? Answer with just the three values, nothing else." \
             | tee /tmp/agent-output.txt
 
