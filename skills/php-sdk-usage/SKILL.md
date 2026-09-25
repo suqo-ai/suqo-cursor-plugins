@@ -1,7 +1,7 @@
 ---
 name: php-sdk-usage
 description: >-
-  Use for any PHP work with the SUQO PHP SDK (suqo/suqo-php, namespace Suqo\) —
+  Use for any PHP work with the SUQO PHP SDK (suqo/sdk-php, namespace Suqo\) —
   listing products, creating or cancelling subscriptions, moving a billing
   cycle, paging, verifying inbound webhooks, wiring the client into Laravel,
   Symfony, Slim or plain PHP, reading SUQO error responses, or testing code that
@@ -11,11 +11,11 @@ description: >-
 
 # SUQO PHP SDK — usage
 
-`suqo/suqo-php`, namespace `Suqo\`, PHP 8.1+, extensions `curl`, `json`, `hash`.
+`suqo/sdk-php`, namespace `Suqo\`, PHP 8.1+, extensions `curl`, `json`, `hash`.
 No runtime Composer dependencies.
 
 ```bash
-composer require suqo/suqo-php
+composer require suqo/sdk-php
 ```
 
 ## Workflow
