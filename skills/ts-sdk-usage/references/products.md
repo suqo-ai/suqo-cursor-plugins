@@ -42,6 +42,7 @@ straight through. See `subscriptions.md`.
 
 ```ts
 interface ProductVat { isVatActive: boolean; vatType: string; vatPercentage: string; }
+interface ProductImage { image: string; imageOrder: number; }
 interface BillingPeriod {
   pbpId: string; intervalType: string; intervalCount: number; label: string;
   price: string; currency: string; isCurrent: boolean; isLimited: boolean;
@@ -51,10 +52,18 @@ interface Plan { planId: string; planName: string; description: string; billingP
 interface Product {
   productId: string; name: string; description: string; type: string; isActive: boolean;
   termsAndConditions: string; featuresAndBenefits: string; vat: ProductVat | null;
-  productImage: string[]; plan: Plan[]; totalSubscribers: string;
+  productImage: ProductImage[]; plan: Plan[]; totalSubscribers: string;
   createdAt: string; updatedAt: string;
 }
 ```
+
+`productImage` was corrected from `string[]` to `ProductImage[]` in
+`@suqo/sdk@1.1.0` — the wire has always sent image objects
+(`{ image, image_order }`), never bare URLs. Upgrading from `1.0.0`, replace
+`product.productImage[i]` used as a URL with `product.productImage[i].image`,
+**and** replace any `image_order` access with `imageOrder` — `1.1.0` renames
+the key on the way in, it's not just a type correction (confirmed against
+both published builds).
 
 Every property here is the plain camelCase of the wire's snake_case field —
 no renames anywhere in this resource (`product_id` → `productId`,
