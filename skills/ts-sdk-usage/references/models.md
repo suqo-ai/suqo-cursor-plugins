@@ -22,6 +22,7 @@ further renames.
 
 ```ts
 interface ProductVat { isVatActive: boolean; vatType: string; vatPercentage: string; }
+interface ProductImage { image: string; imageOrder: number; }
 interface BillingPeriod {
   pbpId: string; intervalType: string; intervalCount: number; label: string;
   price: string; currency: string; isCurrent: boolean; isLimited: boolean;
@@ -31,10 +32,22 @@ interface Plan { planId: string; planName: string; description: string; billingP
 interface Product {
   productId: string; name: string; description: string; type: string; isActive: boolean;
   termsAndConditions: string; featuresAndBenefits: string; vat: ProductVat | null;
-  productImage: string[]; plan: Plan[]; totalSubscribers: string;
+  productImage: ProductImage[]; plan: Plan[]; totalSubscribers: string;
   createdAt: string; updatedAt: string;
 }
 ```
+
+`productImage` was corrected from `string[]` to `ProductImage[]` in
+`@suqo/sdk@1.1.0`. Two changes, not one: under `1.0.0` the SDK passed the
+wire's `product_image` array through **verbatim** — `1.0.0`'s runtime shape
+was actually `{ image, image_order }` under a lying `string[]` type — and
+`1.1.0` both types it correctly *and* maps each element, renaming
+`image_order` to `imageOrder` (confirmed directly against both published
+builds: `1.0.0`'s output never touches `image_order`; `1.1.0`'s reads it
+specifically to rename it). Upgrading from `1.0.0`: replace
+`product.productImage[i]` used as a URL with `product.productImage[i].image`,
+**and** replace any `(img as any).image_order` access with
+`img.imageOrder` — the runtime key changed, this isn't just a type fix.
 
 `price`, `vatPercentage`, `totalSubscribers` — strings, never coerced.
 
@@ -84,13 +97,18 @@ Wire-renamed as `client` at the top level only; `billing.*` fields get a
 
 ```ts
 interface Customer {
-  id: number;   // integer, not UUID — see customers.md
+  id: string;   // opaque prefixed id, e.g. "cus_1ce18d624" — not a UUID, not an integer — see customers.md
   buyerPhone: string | null; buyerEmail: string | null; fullName: string | null;
+  address: string | null;
   createdAt: string;
 }
+interface CreateCustomerParams { phone: string; fullName?: string; email?: string; address?: string; }
+interface UpdateCustomerParams { fullName?: string; email?: string; address?: string; }
 ```
 
 Distinct from `SubscriptionCustomer` above — do not conflate the two.
+`id` and `address` changed shape in `@suqo/sdk@1.1.0` (was `id: number`, no
+`address` field, in `1.0.0`) — see `customers.md` for the upgrade note.
 
 ## `CreateSubscriptionParams` / `CreateSubscriptionResponse` / `UpdateBillingCycleParams`
 

@@ -81,15 +81,22 @@ one notch less confidence than `cancel`/`updateBillingCycle`.
 ## `suqo.customers`
 
 ```ts
-list(params?: PageParams): Promise<Page<Customer>>     // GET /api/v1/customers/
+list(params?: PageParams): Promise<Page<Customer>>          // GET /api/v1/customers/
 autoPaging(params?: PageParams): AsyncIterableIterator<Customer>
-retrieve(id: number): Promise<Customer>                 // GET /api/v1/customers/{id}/ — id is a NUMBER
+retrieve(id: string): Promise<Customer>                      // GET /api/v1/customers/{id}/ — id is an opaque prefixed STRING, not a number
+create(params: CreateCustomerParams): Promise<Customer>      // POST /api/v1/customers/
+update(id: string, params: UpdateCustomerParams): Promise<Customer> // PATCH /api/v1/customers/{id}/
 ```
 
-Read-only — no create/update/delete; a customer record is created implicitly
-the first time someone subscribes. This is a real, working, tested resource
-(`test/contract/requestShape.test.ts` covers `list`/`retrieve` against a mock
-server; `test/resources/customers.test.ts` covers `autoPaging` separately).
+No `delete`; a customer record is also created implicitly the first time
+someone subscribes. `id` moved from `number` to an opaque `"cus_..."`-prefixed
+`string` in `@suqo/sdk@1.1.0` — see `customers.md` for the upgrade note. This
+is a real, working, tested resource (`test/contract/requestShape.test.ts`
+covers `list`/`retrieve` against a mock server; `test/resources/customers.test.ts`
+covers `autoPaging` separately). `list`/`retrieve`/`autoPaging` retry on
+`NetworkError`/429/5xx same as every read; `create`/`update` never retry,
+same as every other write in this SDK.
+
 **`specs/SDK-SPEC.md` §11 and `docs/typescript-addendum.md` §6
 in the SDK repo both still describe this resource as an unimplemented stub
 that throws — that is stale.** Source, tests, `docs/user/customers.md`, and
