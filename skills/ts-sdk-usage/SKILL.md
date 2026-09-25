@@ -59,7 +59,8 @@ install and client construction.
 | `suqo.subscriptions.cancel(id)` | `MessageResponse` |
 | `suqo.subscriptions.updateBillingCycle(params)` | `MessageResponse` |
 | `suqo.subscriptions.resume(id)` | `MessageResponse` |
-| `suqo.customers.list(params?)` / `.autoPaging()` / `.retrieve(id: number)` | `Page<Customer>` / iterator / `Customer` |
+| `suqo.customers.list(params?)` / `.autoPaging()` / `.retrieve(id: string)` | `Page<Customer>` / iterator / `Customer` |
+| `suqo.customers.create(params)` / `.update(id, params)` | `Customer` |
 | `suqo.webhooks.verify(options)` | `boolean` (never throws) |
 | `mapHttpError(input)` | `SuqoError` |
 
@@ -82,17 +83,22 @@ Apply these without being asked — most bugs against this SDK are one of them.
   mistake in the SDK.
 - **Trailing slash is mandatory** on every route the SDK calls — the SDK
   handles this for you, but don't hand-build a URL to bypass it.
-- **Writes never auto-retry.** `create`, `cancel`, `updateBillingCycle`,
-  `resume` — none of them retry, ever, regardless of `maxRetries`. No
-  idempotency-key support exists yet. A `NetworkError` from a write means it
-  may or may not have landed; reconcile with `list()`, don't resend blindly.
+- **Writes never auto-retry.** `subscriptions.create`, `.cancel`,
+  `.updateBillingCycle`, `.resume`, and `customers.create`/`.update` —
+  none of them retry, ever, regardless of `maxRetries`. No idempotency-key
+  support exists yet. A `NetworkError` from a write means it may or may not
+  have landed; reconcile with `list()`, don't resend blindly.
 - **Two different 400 shapes exist** and `ValidationError` normalizes both —
   field-keyed (`fieldErrors`) and `detail`-shaped (`message` only). See
   `references/errors.md`.
 - **`customers` is real here, unlike its stub-only counterpart in other SUQO
   SDKs' specs.** The SDK repo's own `specs/SDK-SPEC.md`/`typescript-addendum.md`
   are stale on this point — source, tests, and `docs/user/customers.md` all
-  confirm it's a fully working resource. See `references/customers.md`.
+  confirm it's a fully working resource, including `create()`/`update()`.
+  See `references/customers.md`.
+- **`Customer.id` is an opaque prefixed string** (`"cus_..."`), not a plain
+  integer — `@suqo/sdk@1.1.0` corrected a `number` type that never matched
+  the wire. See `references/customers.md`.
 
 ## Webhooks
 
@@ -174,7 +180,7 @@ purpose), and the dashboard's test-event quirk are in
 | `references/client-setup.md` | Constructing the client, installing from npm, environment inference, framework wiring. |
 | `references/products.md` | Listing products/plans, the pbpId chain into subscriptions. |
 | `references/subscriptions.md` | Create, cancel, billing-cycle, resume flows; the customer/client wire rename and its billing-prefix asymmetry. |
-| `references/customers.md` | The real (not stub) customers resource; the integer id exception. |
+| `references/customers.md` | The real (not stub) customers resource; the `1.0.0`→`1.1.0` id-type fix. |
 | `references/webhooks.md` | Verification semantics, signed-payload format, event catalogue. |
 | `references/errors.md` | Error hierarchy, retry rules, mapping to HTTP responses. |
 | `references/models.md` | Property tables for every model, and the short list of wire↔SDK renames. |
